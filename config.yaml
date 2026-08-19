@@ -1,0 +1,56 @@
+# CLIProxyAPI Configuration - Dual Provider Pool (OpenAI + Antigravity)
+host: "127.0.0.1"
+port: 8080
+
+auth-dir: "./auths"
+api-keys: []
+
+request-retry: 1
+max-retry-credentials: 4
+max-retry-interval: 1
+
+routing:
+  strategy: "round-robin"
+  session-affinity: false
+
+remote-management:
+  allow-remote: false
+  secret-key: ""
+
+oauth-model-alias:
+  antigravity:
+    - name: "claude-sonnet-4-6"
+      alias: "claude-sonnet-4.6-thinking"
+      display-name: "Claude Sonnet 4.6 (Thinking)"
+    - name: "claude-opus-4-6-thinking"
+      alias: "claude-opus-4.6-thinking"
+      display-name: "Claude Opus 4.6 (Thinking)"
+    - name: "claude-opus-4.6-thinking"
+      alias: "claude-opus-4.6-thinking"
+      display-name: "Claude Opus 4.6 (Thinking)"
+    - name: "gemini-3.7-flash-high"
+      alias: "gemini-3.7-flash"
+      display-name: "Gemini 3.7 Flash (High)"
+
+oauth-excluded-models:
+  codex:
+    - "gpt-5.5"
+    - "gpt-5.4"
+    - "gpt-5.4-mini"
+    - "gpt-5.3-codex-spark"
+    - "codex-auto-review"
+    - "gpt-image-1.5"
+    - "gpt-image-2"
+  antigravity:
+    - "gemini-3-flash"
+    - "gemini-3.1-flash-image"
+    - "gemini-3.1-flash-lite"
+    - "gemini-pro-agent"
+    - "gemini-3.1-pro-low"
+    - "gemini-3-flash-agent"
+    - "gemini-3.5-flash-extra-low"
+    - "gemini-3.5-flash-low"
+    - "gemini-3.6-flash-high"
+    - "gpt-oss-120b-medium"
+
+debug: true

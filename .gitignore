@@ -1,0 +1,52 @@
+﻿# Executables & Binaries
+*.exe
+*.bin
+*.dll
+*.so
+*.dylib
+
+# Authentication & Credentials
+auths/
+auths_disabled/
+credentials/
+*.token
+*.key
+*.pem
+.env
+.env.*
+!.env.example
+
+# Databases & Sessions
+*.sqlite
+*.sqlite3
+*.db
+sessions/
+models_cache.json
+
+# Logs & Temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.gemini/
+.codex/
+
+# Python & Node Cache
+__pycache__/
+*.py[cod]
+*.class
+node_modules/

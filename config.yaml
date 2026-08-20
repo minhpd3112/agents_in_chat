@@ -22,15 +22,15 @@ oauth-model-alias:
     - name: "claude-sonnet-4-6"
       alias: "claude-sonnet-4.6-thinking"
       display-name: "Claude Sonnet 4.6 (Thinking)"
+      force-mapping: true
     - name: "claude-opus-4-6-thinking"
       alias: "claude-opus-4.6-thinking"
       display-name: "Claude Opus 4.6 (Thinking)"
-    - name: "claude-opus-4.6-thinking"
-      alias: "claude-opus-4.6-thinking"
-      display-name: "Claude Opus 4.6 (Thinking)"
+      force-mapping: true
     - name: "gemini-3.7-flash-high"
       alias: "gemini-3.7-flash"
       display-name: "Gemini 3.7 Flash (High)"
+      force-mapping: true
 
 oauth-excluded-models:
   codex:

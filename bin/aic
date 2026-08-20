@@ -1,0 +1,4 @@
+﻿#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/aic.py" "$@" 2>/dev/null || python "$SCRIPT_DIR/aic.py" "$@"
+

@@ -6,7 +6,8 @@
 *.dylib
 
 # Authentication & Credentials
-auths/
+auths/*
+!auths/.gitkeep
 auths_disabled/
 credentials/
 *.token
@@ -50,3 +51,9 @@ __pycache__/
 *.py[cod]
 *.class
 node_modules/
+
+
+# Reference & Scratch Repositories
+ma_nguon_tham_khao/
+scratch/
+

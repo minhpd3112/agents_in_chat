@@ -31,7 +31,15 @@ if (-not (Test-Path $ProxyExe)) {
 }
 
 
-# 2. Kiem tra thu muc auths
+# 2. Kiem tra file config.yaml
+$ConfigFile = Join-Path $ScriptDir "config.yaml"
+$ConfigExample = Join-Path $ScriptDir "config.example.yaml"
+if (-not (Test-Path $ConfigFile) -and (Test-Path $ConfigExample)) {
+    Copy-Item -Path $ConfigExample -Destination $ConfigFile -Force
+    Write-Host "-> Da khoi tao config.yaml tu config.example.yaml." -ForegroundColor Green
+}
+
+# 3. Kiem tra thu muc auths
 $AuthsDir = Join-Path $ScriptDir "auths"
 if (-not (Test-Path $AuthsDir)) {
     New-Item -ItemType Directory -Path $AuthsDir | Out-Null

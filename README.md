@@ -56,7 +56,16 @@ Sau khi cài đặt, có thể gọi lệnh `aic` từ bất kỳ thư mục nà
 
 ---
 
-## 4. Cấu trúc thư mục
+## 4. Giao diện Web Dashboard
+
+Theo dõi trực quan trạng thái tài khoản, lưu lượng request và live logs qua trình duyệt:
+
+- **Địa chỉ:** `http://127.0.0.1:8080/management.html`
+- **Mật khẩu mặc định:** `aic` (tích chọn Remember password để tự động lưu phiên)
+
+---
+
+## 5. Cấu trúc thư mục
 
 ```
 agents_in_chat/
@@ -66,6 +75,8 @@ agents_in_chat/
 │   ├── aic.ps1                  # Wrapper cho PowerShell
 │   └── aic                      # Wrapper cho Linux và macOS
 ├── auths/                       # Thư mục lưu token OAuth
+├── static/
+│   └── management.html          # Giao diện Web Dashboard
 ├── cli-proxy-api.exe            # Binary Proxy Service
 ├── config.yaml                  # Cấu hình định tuyến và retry
 ├── install.ps1 / install.sh     # Cài đặt và đăng ký PATH

@@ -32,6 +32,11 @@ if [ ! -f "$PROXY_BIN" ]; then
 fi
 
 
+if [ ! -f "$SCRIPT_DIR/config.yaml" ] && [ -f "$SCRIPT_DIR/config.example.yaml" ]; then
+    cp "$SCRIPT_DIR/config.example.yaml" "$SCRIPT_DIR/config.yaml"
+    echo -e "-> Da khoi tao config.yaml tu config.example.yaml."
+fi
+
 AUTHS_DIR="$SCRIPT_DIR/auths"
 mkdir -p "$AUTHS_DIR"
 AUTH_COUNT=$(find "$AUTHS_DIR" -name "*.json" 2>/dev/null | wc -l || echo 0)

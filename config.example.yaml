@@ -14,8 +14,9 @@ routing:
   session-affinity: false
 
 remote-management:
-  allow-remote: false
-  secret-key: ""
+  disable-auto-update-panel: true
+  allow-remote: true
+  secret-key: "aic"
 
 oauth-model-alias:
   antigravity:

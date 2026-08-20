@@ -1,4 +1,4 @@
-﻿# Executables & Binaries
+# Executables & Binaries
 *.exe
 *.bin
 *.dll
@@ -16,6 +16,8 @@ credentials/
 .env
 .env.*
 !.env.example
+config.yaml
+!config.example.yaml
 
 # Databases & Sessions
 *.sqlite

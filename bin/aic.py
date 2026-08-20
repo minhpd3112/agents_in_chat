@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # ==============================================================================
 #  aic - Agents in Chat Multi-Model Quota Pool CLI Manager
 #  Inspired by anoti ergonomic CLI pattern
@@ -48,10 +48,11 @@ def cmd_start():
     print("[AIC] Dang khoi dong Proxy API Service chay ngam 100% (an hoan toan)...")
     if sys.platform == "win32":
         proxy_exe = ROOT_DIR / "cli-proxy-api.exe"
+        config_file = ROOT_DIR / "config.yaml"
         DETACHED_PROCESS = 0x00000008
         CREATE_NO_WINDOW = 0x08000000
         subprocess.Popen(
-            [str(proxy_exe)],
+            [str(proxy_exe), "-config", str(config_file)],
             cwd=str(ROOT_DIR),
             creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
             stdout=subprocess.DEVNULL,

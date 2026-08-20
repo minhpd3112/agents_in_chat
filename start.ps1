@@ -6,9 +6,9 @@ $ProxyExe = Join-Path $ScriptDir "cli-proxy-api.exe"
 $conn = Test-NetConnection -ComputerName "127.0.0.1" -Port 8080 -WarningAction SilentlyContinue
 if ($conn.TcpTestSucceeded) {
     Write-Host "-> [ONLINE] CLIProxyAPI dang chay san tai http://127.0.0.1:8080" -ForegroundColor Yellow
-} else {
+    $ConfigFile = Join-Path $ScriptDir "config.yaml"
     $startup = New-CimInstance -ClassName Win32_ProcessStartup -Property @{ ShowWindow = [UInt16]0 } -ClientOnly
-    $proc = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "$ProxyExe"; CurrentDirectory = "$ScriptDir"; ProcessStartupInformation = $startup }
+    $proc = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "`"$ProxyExe`" -config `"$ConfigFile`""; CurrentDirectory = "$ScriptDir"; ProcessStartupInformation = $startup }
     Start-Sleep -Seconds 2
     $PortCheck = Test-NetConnection -ComputerName "127.0.0.1" -Port 8080 -WarningAction SilentlyContinue
     if ($PortCheck.TcpTestSucceeded) {

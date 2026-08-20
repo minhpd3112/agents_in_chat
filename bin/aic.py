@@ -54,7 +54,7 @@ def cmd_start() -> int:
         res = subprocess.run(["bash", str(sh_script)])
         if res.returncode != 0:
             return res.returncode
-        
+
     import time
     for _ in range(5):
         time.sleep(1)
@@ -89,7 +89,7 @@ def cmd_status() -> int:
     print("=" * 65)
     print(f"  AGENTS IN CHAT (AIC) SYSTEM STATUS  |  v{VERSION}")
     print("=" * 65)
-    
+
     # 1. Proxy
     online, models = check_proxy_health()
     if online:
@@ -201,8 +201,34 @@ def cmd_login_codex(mode=None) -> int:
     return subprocess.run(args, cwd=str(ROOT_DIR)).returncode
 
 
+HELP_TEXT = f"""
+======================================================================
+               AGENTS IN CHAT (AIC) CLI MANAGER v{VERSION}
+======================================================================
+Su dung: aic <lenh> [tuy chon]
+
+Cac lenh kha dung:
+  aic start       - Khoi dong Proxy API chay ngam tren cong 8080
+  aic stop        - Tat Proxy API va giai phong RAM tai nguyen
+  aic restart     - Khoi dong lai Proxy API Service
+  aic status      - Kiem tra tinh trang he thong (Proxy, Provider, Cache)
+  aic test        - Chay bo kiem thu tu dong 7/7 test suites
+  aic login_agy   - Dang nhap Google Antigravity (Gemini Flash & Claude Sonnet/Opus)
+  aic login_codex - Dang nhap OpenAI Codex (Tuy chon: Browser hoac Device Code)
+  aic uninstall   - Khoi phuc cau hinh OpenAI goc va bao toan lich su chat de resume
+
+Danh sach 6 model ho tro trong menu /model cua Codex CLI:
+  1. gemini-3.7-flash            (High Thinking, Function Calling)
+  2. claude-sonnet-4.6-thinking  (Deep Reasoning, Tool Calling)
+  3. claude-opus-4.6-thinking    (Ultra Thinking Architecture)
+  4. gpt-5.6-sol                 (Flagship Frontier)
+  5. gpt-5.6-terra               (Balanced Agentic)
+  6. gpt-5.6-luna                (Fast & Lightweight)
+======================================================================
+"""
+
 def print_help() -> int:
-    print(help_text.strip())
+    print(HELP_TEXT.strip())
     return 0
 
 def main() -> int:

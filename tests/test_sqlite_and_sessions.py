@@ -1,41 +1,21 @@
-import os, sys, sqlite3, json
+import os
+import sys
+from pathlib import Path
 
-def test_sqlite_and_sessions():
-    # 1. Check state_5.sqlite
-    db_path = os.path.expanduser("~/.codex/state_5.sqlite")
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            c = conn.cursor()
-            c.execute("SELECT COUNT(*) FROM threads WHERE model_provider != 'custom' AND model_provider IS NOT NULL;")
-            non_custom_count = c.fetchone()[0]
-            conn.close()
-            if non_custom_count > 0:
-                return False, f"Found {non_custom_count} threads in state_5.sqlite with non-custom provider (Need sync to 'custom')"
-        except Exception as e:
-            return False, f"Error reading state_5.sqlite: {e}"
-    
-    # 2. Check session headers in ~/.codex/sessions
-    sessions_dir = os.path.expanduser("~/.codex/sessions")
-    checked_files = 0
-    if os.path.exists(sessions_dir):
-        for root, _, files in os.walk(sessions_dir):
-            for f in files:
-                if f.endswith(".jsonl"):
-                    checked_files += 1
-                    p = os.path.join(root, f)
-                    try:
-                        with open(p, "r", encoding="utf-8") as sfile:
-                            first_line = sfile.readline()
-                        if first_line:
-                            d = json.loads(first_line)
-                            p_val = d.get("payload", {})
-                            if isinstance(p_val, dict) and p_val.get("model_provider") not in ["custom", None]:
-                                return False, f"Session {f} header has model_provider='{p_val.get('model_provider')}' (Expected 'custom')"
-                    except Exception:
-                        pass
-    
-    return True, f"SQLite threads and {checked_files} session headers all sync to model_provider='custom'."
+# Add scripts directory to path to import sync_sessions
+scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+if str(scripts_dir) not in sys.path:
+    sys.path.insert(0, str(scripts_dir))
+
+from sync_sessions import verify_provider, get_codex_dir
+
+def test_sqlite_and_sessions(codex_dir: Path = None):
+    target_dir = codex_dir or get_codex_dir()
+    code = verify_provider("custom", target_dir)
+    if code == 0:
+        return True, "SQLite threads and session headers all verified matching provider='custom'."
+    else:
+        return False, "Verification failed for SQLite threads or session headers."
 
 if __name__ == "__main__":
     ok, msg = test_sqlite_and_sessions()

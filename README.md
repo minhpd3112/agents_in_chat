@@ -51,7 +51,7 @@ Sau khi cài đặt, có thể gọi lệnh `aic` từ bất kỳ thư mục nà
 | `aic test` | Chạy bộ kiểm thử tự động 7 suites |
 | `aic login_agy` | Đăng nhập tài khoản Google Antigravity |
 | `aic login_codex` | Đăng nhập tài khoản OpenAI Codex |
-| `aic uninstall` | Khôi phục nguyên bản cài đặt gốc Codex CLI |
+| `aic uninstall` | Khôi phục cấu hình Codex CLI về provider OpenAI gốc, bảo toàn lịch sử chat để tiếp tục resume |
 
 ---
 
@@ -81,7 +81,7 @@ agents_in_chat/
 ├── install.ps1 / install.sh     # Cài đặt và đăng ký PATH
 ├── start.ps1 / start.sh         # Khởi động dịch vụ ngầm
 ├── stop.ps1 / stop.sh           # Dừng dịch vụ
-├── uninstall.ps1 / uninstall.sh # Khôi phục cài đặt gốc
+├── uninstall.ps1 / uninstall.sh # Khôi phục cấu hình OpenAI gốc & bảo toàn lịch sử chat
 ├── scripts/
 │   ├── configure_codex_toml.py  # Xử lý cấu hình TOML
 │   └── sync_sessions.py         # Đồng bộ lịch sử phiên chat

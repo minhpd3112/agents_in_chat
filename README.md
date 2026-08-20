@@ -36,6 +36,11 @@ Có thể đăng nhập nhiều tài khoản liên tiếp để nạp vào Quota
   aic login_codex
   ```
 
+**Bắt đầu sử dụng Codex CLI:**
+```bash
+codex
+```
+
 ---
 
 ## 3. Quản trị hệ thống qua lệnh aic

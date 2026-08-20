@@ -2,7 +2,7 @@
 
 Công cụ tích hợp và quản trị Quota Pool đa tài khoản cho OpenAI Codex CLI, phục vụ 2 chức năng chính:
 
-1. **Mở rộng mô hình AI:** Đưa các mô hình hàng đầu như Gemini 3.7 Flash, Claude Sonnet 4.6, Claude Opus 4.6, GPT Sol, GPT Terra, GPT Luna vào làm việc trực tiếp trong giao diện OpenAI Codex CLI.
+1. **Đa mô hình trên cùng một phiên chat:** Làm việc và chuyển đổi linh hoạt giữa các mô hình AI hàng đầu như Gemini 3.7 Flash, Claude Sonnet 4.6, Claude Opus 4.6, GPT Sol, GPT Terra, GPT Luna trực tiếp trên cùng một đoạn chat trong OpenAI Codex CLI.
 2. **Gộp Quota đa tài khoản:** Kết nối nhiều tài khoản OAuth Google và OpenAI, tự động cân bằng tải Round-Robin và tự động chuyển tài khoản khi gặp giới hạn Rate Limit 429 để duy trì làm việc liên tục không bị gián đoạn.
 
 ---
@@ -26,17 +26,14 @@ Kịch bản cài đặt tự động tải binary nếu thiếu, cấu hình `c
 
 Có thể đăng nhập nhiều tài khoản liên tiếp để nạp vào Quota Pool.
 
-- **Google Antigravity (Gemini và Claude):**
+- **Google Antigravity:**
   ```bash
   aic login_agy
   ```
-  In link xác thực OAuth trên terminal để click hoặc copy dán vào trình duyệt.
 
-- **OpenAI Codex (GPT):**
+- **OpenAI Codex:**
   ```bash
-  aic login_codex          # Menu chọn phương thức 1 hoặc 2
-  aic login_codex browser  # Lấy link đăng nhập OAuth
-  aic login_codex device   # Lấy mã xác thực thiết bị qua auth0.openai.com/activate
+  aic login_codex
   ```
 
 ---

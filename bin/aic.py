@@ -15,11 +15,9 @@ VERSION = "1.0.0"
 
 def get_root_dir() -> Path:
     script_dir = Path(__file__).resolve().parent
-    # If aic.py is in bin/ subfolder, the project root is parent directory
-    if (script_dir.parent / "config.yaml").exists() or (script_dir.parent / "install.ps1").exists():
+    if (script_dir.parent / "config.yaml").exists() or (script_dir.parent / "config.example.yaml").exists() or (script_dir.parent / "install.ps1").exists():
         return script_dir.parent
-    # If aic.py is placed directly in root directory
-    if (script_dir / "config.yaml").exists() or (script_dir / "install.ps1").exists():
+    if (script_dir / "config.yaml").exists() or (script_dir / "config.example.yaml").exists() or (script_dir / "install.ps1").exists():
         return script_dir
     return script_dir.parent
 
@@ -39,57 +37,55 @@ def check_proxy_health():
         pass
     return False, []
 
-def cmd_start():
+def cmd_start() -> int:
     online, _ = check_proxy_health()
     if online:
-        print("[AIC] Proxy API Service da dang chay san tren port 8080.")
-        return
+        print("[AIC] Proxy API Service da dang hoat dong san sang.")
+        return 0
 
     print("[AIC] Dang khoi dong Proxy API Service chay ngam 100% (an hoan toan)...")
     if sys.platform == "win32":
-        proxy_exe = ROOT_DIR / "cli-proxy-api.exe"
-        config_file = ROOT_DIR / "config.yaml"
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NO_WINDOW = 0x08000000
-        subprocess.Popen(
-            [str(proxy_exe), "-config", str(config_file)],
-            cwd=str(ROOT_DIR),
-            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            close_fds=True
-        )
+        ps_script = ROOT_DIR / "start.ps1"
+        res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
+        if res.returncode != 0:
+            return res.returncode
     else:
         sh_script = ROOT_DIR / "start.sh"
-        subprocess.run(["bash", str(sh_script)])
+        res = subprocess.run(["bash", str(sh_script)])
+        if res.returncode != 0:
+            return res.returncode
         
     import time
     for _ in range(5):
         time.sleep(1)
         ok, models = check_proxy_health()
         if ok:
-            print(f"[OK] CLIProxyAPI da khoi dong thanh cong tai http://127.0.0.1:8080 ({len(models)} models online)")
-            return
-    print("[WARNING] Da chay binary nhung chua nhan phan hoi port 8080.")
+            print(f"[OK] CLIProxyAPI da khoi dong thanh cong ({len(models)} models online)")
+            return 0
+    print("[WARNING] Da chay binary nhung dich vu proxy chua phan hoi.")
+    return 1
 
 
-def cmd_stop():
+def cmd_stop() -> int:
     print("[AIC] Dang tat Proxy API Service...")
     if sys.platform == "win32":
         ps_script = ROOT_DIR / "stop.ps1"
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
+        res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
+        return res.returncode
     else:
         sh_script = ROOT_DIR / "stop.sh"
-        subprocess.run(["bash", str(sh_script)])
+        res = subprocess.run(["bash", str(sh_script)])
+        return res.returncode
 
-def cmd_restart():
-    cmd_stop()
+def cmd_restart() -> int:
+    stop_code = cmd_stop()
+    if stop_code != 0:
+        return stop_code
     import time
     time.sleep(1)
-    cmd_start()
+    return cmd_start()
 
-def cmd_status():
+def cmd_status() -> int:
     print("=" * 65)
     print(f"  AGENTS IN CHAT (AIC) SYSTEM STATUS  |  v{VERSION}")
     print("=" * 65)
@@ -97,8 +93,9 @@ def cmd_status():
     # 1. Proxy
     online, models = check_proxy_health()
     if online:
+        models_str = ", ".join(models)
         print(f"[OK] Proxy Service (127.0.0.1:8080) : ONLINE [200 OK]")
-        print(f"     -> Models Online ({len(models)}): {', '.join(models)}")
+        print(f"     -> Models Online ({len(models)}): {models_str}")
     else:
         print(f"[OFFLINE] Proxy Service (127.0.0.1:8080) : OFFLINE")
 
@@ -108,9 +105,9 @@ def cmd_status():
     if config_file.exists():
         try:
             content = config_file.read_text(encoding="utf-8")
-            if 'model_provider = "custom"' in content:
+            if "model_provider = \"custom\"" in content:
                 provider_str = "custom (Agents Quota Pool - 10 OAuth Accounts)"
-            elif 'model_provider = "openai"' in content:
+            elif "model_provider = \"openai\"" in content:
                 provider_str = "openai (Vanilla OpenAI Native)"
         except Exception:
             pass
@@ -134,30 +131,24 @@ def cmd_status():
     auth_count = len(list(auths_dir.glob("*.json"))) if auths_dir.exists() else 0
     print(f"[AUTH] OAuth Quota Accounts       : {auth_count} tai khoan san sang")
     print("=" * 65)
+    return 0 if online else 1
 
-def cmd_test():
+def cmd_test() -> int:
     test_runner = ROOT_DIR / "tests" / "run_tests.py"
     if not test_runner.exists():
         print(f"[ERROR] Khong tim thay bo test tai {test_runner}!")
         return 1
     return subprocess.run([sys.executable, str(test_runner)]).returncode
 
-def cmd_sync(target="custom"):
-    sync_script = ROOT_DIR / "scripts" / "sync_sessions.py"
-    if sync_script.exists():
-        subprocess.run([sys.executable, str(sync_script), target])
-    else:
-        print(f"[ERROR] Khong tim thay script dong bo tai {sync_script}")
-
-def cmd_uninstall():
+def cmd_uninstall() -> int:
     if sys.platform == "win32":
         ps_script = ROOT_DIR / "uninstall.ps1"
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
+        return subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)]).returncode
     else:
         sh_script = ROOT_DIR / "uninstall.sh"
-        subprocess.run(["bash", str(sh_script)])
+        return subprocess.run(["bash", str(sh_script)]).returncode
 
-def cmd_login_agy():
+def cmd_login_agy() -> int:
     proxy_exe = ROOT_DIR / "cli-proxy-api.exe" if sys.platform == "win32" else ROOT_DIR / "cli-proxy-api"
     if not proxy_exe.exists():
         print(f"[ERROR] Khong tim thay binary tai {proxy_exe}!")
@@ -172,7 +163,7 @@ def cmd_login_agy():
     args = [str(proxy_exe), "-antigravity-login", "-no-browser"]
     return subprocess.run(args, cwd=str(ROOT_DIR)).returncode
 
-def cmd_login_codex(mode=None):
+def cmd_login_codex(mode=None) -> int:
     proxy_exe = ROOT_DIR / "cli-proxy-api.exe" if sys.platform == "win32" else ROOT_DIR / "cli-proxy-api"
     if not proxy_exe.exists():
         print(f"[ERROR] Khong tim thay binary tai {proxy_exe}!")
@@ -190,7 +181,7 @@ def cmd_login_codex(mode=None):
             choice = input("Lua chon cua ban [1/2] (Mac dinh: 1): ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n[AIC] Da huy thao tac dang nhap.")
-            return 0
+            return 130
         except Exception:
             choice = "1"
         mode = "device" if choice == "2" else "browser"
@@ -210,73 +201,46 @@ def cmd_login_codex(mode=None):
     return subprocess.run(args, cwd=str(ROOT_DIR)).returncode
 
 
-def print_help():
-    print("""
-======================================================================
-               AGENTS IN CHAT (AIC) CLI MANAGER v1.0.0
-======================================================================
-Su dung: aic <lenh> [tuy chon]
+def print_help() -> int:
+    print(help_text.strip())
+    return 0
 
-Cac lenh kha dung:
-  aic start       - Khoi dong Proxy API chay ngam tren cong 8080
-  aic stop        - Tat Proxy API va giai phong RAM tai nguyen
-  aic restart     - Khoi dong lai Proxy API Service
-  aic status      - Kiem tra tinh trang he thong (Proxy, Provider, Cache)
-  aic test        - Chay bo kiem thu tu dong 7/7 test suites
-  aic login_agy   - Dang nhap Google Antigravity (Gemini Flash & Claude Sonnet/Opus)
-  aic login_codex - Dang nhap OpenAI Codex (Tuy chon: Browser hoac Device Code)
-  aic sync        - Dong bo lich su chat giua custom va openai (aic sync [custom|openai])
-  aic uninstall   - Factory Reset 100% ve nguyen ban OpenAI Codex CLI
-
-Danh sach 6 model ho tro trong menu /model cua Codex CLI:
-  1. gemini-3.7-flash            (High Thinking, Function Calling)
-  2. claude-sonnet-4.6-thinking  (Deep Reasoning, Tool Calling)
-  3. claude-opus-4.6-thinking    (Ultra Thinking Architecture)
-  4. gpt-5.6-sol                 (Flagship Frontier)
-  5. gpt-5.6-terra               (Balanced Agentic)
-  6. gpt-5.6-luna                (Fast & Lightweight)
-======================================================================
-""")
-
-def main():
+def main() -> int:
     if len(sys.argv) < 2:
-        print_help()
-        return
+        return print_help()
 
     cmd = sys.argv[1].lower().strip("-")
     if cmd in ["start"]:
-        cmd_start()
+        return cmd_start()
     elif cmd in ["stop"]:
-        cmd_stop()
+        return cmd_stop()
     elif cmd in ["restart"]:
-        cmd_restart()
+        return cmd_restart()
     elif cmd in ["status", "st"]:
-        cmd_status()
+        return cmd_status()
     elif cmd in ["test", "t"]:
-        cmd_test()
+        return cmd_test()
     elif cmd in ["login_agy", "login-agy", "login_anti", "login-anti"]:
-        cmd_login_agy()
+        return cmd_login_agy()
     elif cmd in ["login_codex", "login-codex", "login_openai", "login-openai"]:
         mode = sys.argv[2] if len(sys.argv) > 2 else None
-        cmd_login_codex(mode)
+        return cmd_login_codex(mode)
     elif cmd in ["login", "auth"]:
         sub = sys.argv[2].lower() if len(sys.argv) > 2 else "agy"
         if sub in ["agy", "anti", "antigravity"]:
-            cmd_login_agy()
+            return cmd_login_agy()
         else:
             mode = sys.argv[3] if len(sys.argv) > 3 else None
-            cmd_login_codex(mode)
-    elif cmd in ["sync"]:
-        target = sys.argv[2] if len(sys.argv) > 2 else "custom"
-        cmd_sync(target)
+            return cmd_login_codex(mode)
     elif cmd in ["uninstall", "remove"]:
-        cmd_uninstall()
+        return cmd_uninstall()
     elif cmd in ["help", "h"]:
-        print_help()
+        return print_help()
     else:
         print(f"[WARN] Lenh '{cmd}' khong hop le.")
         print_help()
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

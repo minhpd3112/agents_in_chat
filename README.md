@@ -49,7 +49,6 @@ Sau khi cài đặt, có thể gọi lệnh `aic` từ bất kỳ thư mục nà
 | `aic restart` | Khởi động lại Proxy Service |
 | `aic status` | Kiểm tra trạng thái Proxy, Provider và Khóa Cache |
 | `aic test` | Chạy bộ kiểm thử tự động 7 suites |
-| `aic sync` | Đồng bộ lịch sử phiên chat giữa custom và openai |
 | `aic login_agy` | Đăng nhập tài khoản Google Antigravity |
 | `aic login_codex` | Đăng nhập tài khoản OpenAI Codex |
 | `aic uninstall` | Khôi phục nguyên bản cài đặt gốc Codex CLI |

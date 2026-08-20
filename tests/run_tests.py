@@ -15,7 +15,7 @@ def run_all():
     print("=" * 70)
     
     suites = [
-        ("1. Proxy Health & Port 8080", test_proxy_health),
+        ("1. Proxy Health & Endpoint (http://127.0.0.1:8080)", test_proxy_health),
         ("2. Config YAML (Routing, Retries & Aliases)", test_config_yaml),
         ("3. Models Cache (BOM Check, TTL 2099 & Tool Specs)", test_models_cache),
         ("4. Codex config.toml Integrity", test_codex_config),

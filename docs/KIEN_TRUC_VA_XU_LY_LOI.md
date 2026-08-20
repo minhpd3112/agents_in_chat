@@ -17,15 +17,14 @@ Tài liệu giải trình kiến trúc, cấu hình chuẩn và cẩm nang xử 
 ┌─────────────────────────────────────────────────────────────┐
 │              CLIProxyAPI (Local Reverse Proxy)              │
 │                      (127.0.0.1:8080)                       │
-│    - Round-Robin Load Balancer & Retry Engine (4x retry)    │
-│    - Multi-Account OAuth Quota Pool (Antigravity & Codex)   │
+│    - Round-Robin Load Balancer & Retry Engine               │
+│    - Multi-Account OAuth Quota Pool                         │
 │    - Responses API Wire Compatibility Adapter               │
 └──────────────┬──────────────────────────────┬───────────────┘
                │                              │
                ▼                              ▼
 ┌──────────────────────────────┐┌──────────────────────────────┐
 │  Google CloudCode Backend    ││      OpenAI Codex API        │
-│  (Gemini 3.7 & Claude 4.6)   ││   (GPT Sol / Terra / Luna)   │
 └──────────────────────────────┘└──────────────────────────────┘
 ```
 

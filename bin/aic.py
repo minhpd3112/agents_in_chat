@@ -184,7 +184,7 @@ def cmd_login_codex(mode=None):
         print("=" * 68)
         print("Chon phuong thuc xac thuc:")
         print("  [1] Browser OAuth Flow (Hien thi link xac thuc de click/copy)")
-        print("  [2] Device Code Flow   (Nhap ma xac thuc tren auth0.openai.com/activate)")
+        print("  [2] Device Code Flow   (Nhap ma xac thuc tren auth.openai.com/codex/device)")
         print("-" * 68)
         try:
             choice = input("Lua chon cua ban [1/2] (Mac dinh: 1): ").strip()
@@ -198,9 +198,9 @@ def cmd_login_codex(mode=None):
     mode = mode.lower()
     if mode in ["device", "code", "device-code", "device_code", "2"]:
         print("\n[AIC] Dang khoi dong Device Code Flow...")
-        print("-> Vui long truy cap https://auth0.openai.com/activate va nhap ma:")
+        print("-> Vui long truy cap https://auth.openai.com/codex/device va nhap ma:")
         print("-" * 68)
-        args = [str(proxy_exe), "-codex-device-login"]
+        args = [str(proxy_exe), "-codex-device-login", "-no-browser"]
     else:
         print("\n[AIC] Dang khoi dong Browser OAuth Flow...")
         print("-> Vui long click hoac copy duong link duoi day dan vao trinh duyet:")

@@ -157,3 +157,23 @@ sandbox = "elevated"
   3. *Legacy Fallback bóc tách Section:* Bộ phân tích TOML phân chia top-level và các named sections (`[profiles.*]`, `[projects.*]`, `[mcp_servers.*]`), chỉ làm sạch các giá trị AIC ở top-level và bảo toàn 100% tất cả các section của người dùng.
   4. *Rollback Transaction Toàn diện:* `install.ps1`/`install.sh` bọc toàn bộ quy trình trong cơ chế rollback tự động. Nếu gặp sự cố ở bất kỳ bước nào (kể cả PATH, Profile, Start Proxy), hệ thống sẽ hoàn tác sạch sẽ và trả về exit code lỗi.
   5. *Windows In-Place Write Fallback:* Khi gặp `WinError 5 Access is denied` (do file session đang được mở bởi tiến trình Codex CLI đang hoạt động), script tự động chuyển sang ghi in-place an toàn với `seek(0)` và `truncate()` mà không làm gián đoạn tiến trình.
+
+---
+
+### 11. Sự cố Kẹt Model Cũ khi Resume (`Deadlock Model Switching Handshake` & Lỗi 503 `auth_unavailable`)
+* **Hiện tượng:**
+  * Người dùng logout/xóa tài khoản của một provider (ví dụ OpenAI `codex` - model `gpt-5.6-sol`).
+  * Sau đó resume lại đoạn chat cũ từng tạo bằng model đó và gõ lệnh `/model` để đổi sang model khác (ví dụ `claude-sonnet-4.6-thinking`).
+  * Dù thanh trạng thái TUI hiển thị model mới và đã tắt mở lại terminal, Codex CLI vẫn gửi request với model cũ và bị Proxy từ chối:
+    ```text
+    503 Service Unavailable: auth_unavailable: no auth available (providers codex, model gpt-5.6-sol)
+    {"error":{"type":"invalid_request_error","code":"model_not_found","message":"unknown provider for model gpt-5.6-sol"}}
+    ```
+* **Bản chất kỹ thuật & Phân tích nguyên nhân:**
+  1. *Khởi tạo `turn_context`:* Khi resume session, Codex CLI đọc trạng thái `turn_context` ở cuối file session `.jsonl` (lúc này đang lưu `model: "gpt-5.6-sol"`).
+  2. *Vòng lặp nghẽn Handshake (Deadlock):* Khi người dùng gửi prompt đầu tiên sau khi đổi model, request của Codex CLI vẫn mang định danh `model` cũ trong payload Responses API để gửi kèm thẻ `<model_switch>`.
+  3. *Tầng mạng từ chối trước:* Khi request tới Proxy, Proxy kiểm tra thư mục `auths/` thấy thiếu tài khoản cho provider cũ $\rightarrow$ ném ra lỗi HTTP 503 ngay lập tức.
+  4. *Không ghi nhận được trạng thái mới:* Do request thất bại ở tầng mạng, Codex CLI không thể hoàn thành turn và **không thể ghi đè `turn_context` mới xuống file trên đĩa**. Khi khởi động lại terminal, Codex CLI tiếp tục nạp lại `turn_context` cũ và lặp lại lỗi.
+* **Giải pháp xử lý triệt để:**
+  * **Giải pháp 1 (Nạp tài khoản):** Đăng nhập lại tài khoản tương ứng qua `aic login_codex` để Proxy chấp nhận handshake model switch.
+  * **Giải pháp 2 (Override session state):** Cập nhật trực tiếp trường `model` trong các khối `turn_context` và `thread_settings_applied` ở các dòng cuối file session `.jsonl` sang model đích (`claude-sonnet-4.6-thinking` hoặc `gemini-3.7-flash`) để phá vỡ vòng lặp kẹt model.

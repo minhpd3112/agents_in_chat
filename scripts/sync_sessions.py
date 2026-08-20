@@ -78,16 +78,53 @@ def sync_provider(target_provider: str, codex_dir: Path) -> int:
                             failed_files.append((file_path, "Invalid session schema (missing dict payload)"))
                             continue
 
+                        needs_write = False
                         if meta["payload"].get("model_provider") != target_provider:
                             meta["payload"]["model_provider"] = target_provider
                             lines[0] = json.dumps(meta, ensure_ascii=False) + "\n"
+                            needs_write = True
 
-                            with open(tmp_file_path, "w", encoding="utf-8") as tmp_file:
-                                tmp_file.writelines(lines)
-                                tmp_file.flush()
-                                os.fsync(tmp_file.fileno())
-                            os.replace(tmp_file_path, file_path)
-                            updated_files += 1
+                        # When restoring to OpenAI, sanitize foreign/synthetic reasoning tokens (cpa-) that OpenAI cannot decrypt
+                        if target_provider == "openai":
+                            cleaned_lines = [lines[0]]
+                            carrier_dropped = 0
+                            for l_idx in range(1, len(lines)):
+                                l_str = lines[l_idx].strip()
+                                if not l_str:
+                                    continue
+                                try:
+                                    item_data = json.loads(l_str)
+                                    if item_data.get("type") == "response_item":
+                                        p = item_data.get("payload")
+                                        if isinstance(p, dict) and p.get("type") == "reasoning":
+                                            enc = p.get("encrypted_content")
+                                            if enc and isinstance(enc, str) and ("cpa-" in enc or enc.startswith("cpa-")):
+                                                carrier_dropped += 1
+                                                needs_write = True
+                                                continue
+                                    cleaned_lines.append(lines[l_idx])
+                                except Exception:
+                                    cleaned_lines.append(lines[l_idx])
+                            if carrier_dropped > 0:
+                                lines = cleaned_lines
+
+                        if needs_write:
+                            try:
+                                with open(tmp_file_path, "w", encoding="utf-8") as tmp_file:
+                                    tmp_file.writelines(lines)
+                                    tmp_file.flush()
+                                    os.fsync(tmp_file.fileno())
+                                os.replace(tmp_file_path, file_path)
+                                updated_files += 1
+                            except PermissionError:
+                                # On Windows, active Codex process opens files with share read/write but not delete
+                                with open(file_path, "r+", encoding="utf-8") as target_file:
+                                    target_file.seek(0)
+                                    target_file.writelines(lines)
+                                    target_file.truncate()
+                                    target_file.flush()
+                                    os.fsync(target_file.fileno())
+                                updated_files += 1
                     except Exception as e:
                         failed_files.append((file_path, str(e)))
                     finally:

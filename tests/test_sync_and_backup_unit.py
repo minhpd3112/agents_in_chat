@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import sqlite3
@@ -19,7 +19,7 @@ def setup_temp_codex_fixture(target_provider="openai"):
     tmp_dir = Path(tempfile.mkdtemp(prefix="aic_test_codex_"))
     sessions_dir = tmp_dir / "sessions" / "2026-08"
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 1. Create SQLite DB
     db_path = tmp_dir / "state_5.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -30,7 +30,7 @@ def setup_temp_codex_fixture(target_provider="openai"):
         c.execute("INSERT INTO threads VALUES ('t2', ?, 'Chat 2');", (target_provider,))
         c.execute("INSERT INTO threads VALUES ('t3', NULL, 'Untracked Thread');")
     conn.close()
-    
+
     # 2. Create sample session JSONL
     sample_jsonl = sessions_dir / "session_1.jsonl"
     header = {"type": "session_meta", "payload": {"id": "s1", "model_provider": target_provider, "cwd": "/home/user"}}
@@ -40,7 +40,7 @@ def setup_temp_codex_fixture(target_provider="openai"):
         f.write(json.dumps(header) + "\n")
         f.write(json.dumps(msg1) + "\n")
         f.write(json.dumps(msg2) + "\n")
-        
+
     return tmp_dir, sample_jsonl, db_path
 
 
@@ -48,9 +48,9 @@ def run_all_unit_tests() -> bool:
     print("=" * 70)
     print("  RUNNING OFFLINE UNIT TESTS FOR SYNC & BACKUP RECOVERY")
     print("=" * 70)
-    
+
     tests_passed = 0
-    total_tests = 14
+    total_tests = 15
 
     # Test 1: Invalid provider
     print("Test 1: Invalid provider returns 2 and modifies 0 files...")
@@ -79,7 +79,7 @@ def run_all_unit_tests() -> bool:
         assert meta["payload"]["model_provider"] == "custom"
         assert json.loads(lines[1])["content"] == "Hello AI"
         assert json.loads(lines[2])["content"] == "Hello User"
-        
+
         conn = sqlite3.connect(str(db_path))
         c = conn.cursor()
         c.execute("SELECT model_provider FROM threads WHERE id='t1';")
@@ -157,18 +157,18 @@ def run_all_unit_tests() -> bool:
         orig_bytes = jsonl_path.read_bytes()
         def mock_failing_replace(src, dst):
             raise OSError("Simulated disk I/O error during os.replace")
-            
+
         with patch("os.replace", side_effect=mock_failing_replace):
             code = sync_provider("custom", tmp_dir)
             assert code == 1, f"Expected error code 1, got {code}"
-            
+
         # Verify original file untouched byte-for-byte
         assert jsonl_path.read_bytes() == orig_bytes, "Original file was modified or corrupted!"
-        
+
         # Verify no dangling .tmp files
         tmp_files = list(tmp_dir.glob("**/*.tmp*"))
         assert len(tmp_files) == 0, f"Found dangling temp files: {tmp_files}"
-        
+
         # Verify provider in file is still openai
         assert verify_provider("custom", tmp_dir) == 1
         print("  -> [PASS]")
@@ -183,14 +183,14 @@ def run_all_unit_tests() -> bool:
         config_path = tmp_dir / "config.toml"
         raw_lf_content = b'[projects."/test"]\ntrust_level = "trusted"\nmodel = "gpt-5.6-sol"\n'
         config_path.write_bytes(raw_lf_content)
-        
+
         code = configure_custom(tmp_dir)
         assert code == 0
-        
+
         backup_file = tmp_dir / "aic-backup" / "config.toml.bak"
         assert backup_file.exists()
         assert backup_file.read_bytes() == raw_lf_content, "Backup is not byte-exact!"
-        
+
         # Re-run configure_custom - backup must remain unchanged
         configure_custom(tmp_dir)
         assert backup_file.read_bytes() == raw_lf_content
@@ -206,11 +206,11 @@ def run_all_unit_tests() -> bool:
         config_path = tmp_dir / "config.toml"
         bom_content = b'\xef\xbb\xbfmodel_provider = "openai"\nmodel = "gpt-5.6-sol"\n'
         config_path.write_bytes(bom_content)
-        
+
         # Install
         code = configure_custom(tmp_dir)
         assert code == 0
-        
+
         # Restore
         code_res = restore_original(tmp_dir)
         assert code_res == 0
@@ -227,14 +227,14 @@ def run_all_unit_tests() -> bool:
         config_path = tmp_dir / "config.toml"
         if config_path.exists():
             config_path.unlink()
-            
+
         configure_custom(tmp_dir)
         manifest_path = tmp_dir / "aic-backup" / "manifest.json"
         with open(manifest_path, "r", encoding="utf-8") as f:
             m = json.load(f)
         assert m["original_exists"] is False
         assert config_path.exists()
-        
+
         restore_original(tmp_dir)
         assert not config_path.exists(), "Config should be removed since it was absent originally"
         print("  -> [PASS]")
@@ -249,13 +249,13 @@ def run_all_unit_tests() -> bool:
         config_path = tmp_dir / "config.toml"
         orig_config = b'model_provider = "openai"\n'
         config_path.write_bytes(orig_config)
-        
+
         # Create a corrupt manifest
         backup_dir = tmp_dir / "aic-backup"
         backup_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = backup_dir / "manifest.json"
         manifest_path.write_text("{CORRUPT_JSON", encoding="utf-8")
-        
+
         # configure_custom MUST abort and return 1
         code = configure_custom(tmp_dir)
         assert code == 1, f"Expected 1, got {code}"
@@ -287,11 +287,11 @@ def run_all_unit_tests() -> bool:
             'args = ["-y", "@modelcontextprotocol/server-postgres"]\n'
         )
         config_path.write_bytes(legacy_config.encode("utf-8"))
-            
+
         restore_original(tmp_dir)
-        
+
         cleaned = config_path.read_bytes().decode("utf-8")
-            
+
         # Top-level should be openai
         assert 'model_provider = "openai"' in cleaned
         assert '[model_providers.custom]' not in cleaned
@@ -328,6 +328,49 @@ def run_all_unit_tests() -> bool:
     print("  -> [PASS]")
     tests_passed += 1
 
+    # Test 15: Sanitize synthetic carrier reasoning tokens (cpa-) when syncing to openai
+    print("Test 15: Sanitize synthetic carrier reasoning tokens (cpa-) on sync to openai...")
+    tmp_dir, jsonl_path, _ = setup_temp_codex_fixture("custom")
+    try:
+        # Append synthetic carrier reasoning item and normal user/assistant items
+        with open(jsonl_path, "a", encoding="utf-8") as f:
+            carrier_item = {
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "id": "rs_resp_test_123_detached_before_0",
+                    "encrypted_content": "cpa-gemini-responses-carrier-v1:next:function:XYZ"
+                }
+            }
+            real_item = {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Follow up question"}]
+                }
+            }
+            f.write(json.dumps(carrier_item) + "\n")
+            f.write(json.dumps(real_item) + "\n")
+
+        # Sync to openai
+        code = sync_provider("openai", tmp_dir)
+        assert code == 0
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Verify provider changed
+        assert json.loads(lines[0])["payload"]["model_provider"] == "openai"
+        # Verify cpa- carrier item was stripped
+        assert not any("cpa-gemini" in l for l in lines)
+        assert not any("rs_resp_test_123" in l for l in lines)
+        # Verify normal user item was preserved
+        assert any("Follow up question" in l for l in lines)
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
     print("\n" + "=" * 70)
     print(f"OFFLINE UNIT TESTS SUMMARY: {tests_passed}/{total_tests} passed (100% Green)")
     print("=" * 70)
@@ -337,7 +380,7 @@ def run_all_unit_tests() -> bool:
 def test_sync_and_backup_unit():
     ok = run_all_unit_tests()
     if ok:
-        return True, "14/14 offline unit tests passed (Session Sync, Atomic Mock, BOM/LF & Backup/Restore)."
+        return True, "15/15 offline unit tests passed (Session Sync, Carrier Sanitizer, Atomic Mock, BOM/LF & Backup/Restore)."
     else:
         return False, "Offline unit tests failed."
 

@@ -18,6 +18,17 @@ remote-management:
   allow-remote: true
   secret-key: "aic"
 
+openai-compatibility:
+  - name: "opencode-zen"
+    base-url: "https://opencode.ai/zen/v1"
+    api-key-entries:
+      - api-key: "public"
+    models:
+      - name: "x-preview-f-free"
+        alias: "ox-alpha"
+        display-name: "Ox Alpha"
+        force-mapping: true
+
 oauth-model-alias:
   antigravity:
     - name: "claude-sonnet-4-6"

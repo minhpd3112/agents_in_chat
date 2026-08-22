@@ -25,7 +25,7 @@ def test_models_cache():
         return False, f"TTL not locked to 2099! Current: {data.get('fetched_at')}"
     
     models = {m.get('slug'): m for m in data.get('models', [])}
-    for slug in ['gemini-3.7-flash', 'claude-sonnet-4.6-thinking', 'claude-opus-4.6-thinking', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']:
+    for slug in ['gemini-3.7-flash', 'claude-sonnet-4.6-thinking', 'claude-opus-4.6-thinking', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'ox-alpha']:
         if slug not in models:
             return False, f"Missing model: {slug}"
         m = models[slug]
@@ -34,8 +34,18 @@ def test_models_cache():
         if 'gemini' in slug or 'claude' in slug:
             if m.get('tool_mode') != 'direct':
                 return False, f"{slug} tool_mode is '{m.get('tool_mode')}' (must be 'direct')"
-            if m.get('use_responses_lite') is not False:
-                return False, f"{slug} use_responses_lite is {m.get('use_responses_lite')} (must be False)"
+        if 'claude' in slug or slug == 'gemini-3.7-flash':
+            if m.get('default_reasoning_level') != 'high':
+                return False, f"{slug} default_reasoning_level is '{m.get('default_reasoning_level')}' (expected 'high')"
+            efforts = [r.get('effort') for r in m.get('supported_reasoning_levels', [])]
+            if 'xhigh' in efforts:
+                return False, f"{slug} contains 'xhigh' which was requested to be removed!"
+        if slug == 'ox-alpha':
+            efforts = [r.get('effort') for r in m.get('supported_reasoning_levels', [])]
+            if 'max' not in efforts:
+                return False, f"ox-alpha missing 'max' reasoning effort! Current: {efforts}"
+            if m.get('default_reasoning_level') != 'max':
+                return False, f"ox-alpha default_reasoning_level is '{m.get('default_reasoning_level')}' (expected 'max')"
     
     return True, f"Valid models_cache.json with {len(models)} models (visibility='list'), Read-Only LOCKED, TTL 2099, No BOM."
 

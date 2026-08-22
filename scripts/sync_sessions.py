@@ -140,6 +140,25 @@ def sync_provider(target_provider: str, codex_dir: Path) -> int:
         for fp, err in failed_files:
             print(f"  - {fp}: {err}")
 
+    # 3. Invalidate/clear stale thread_history projection cache if files/threads were updated
+    history_db = codex_dir / "thread_history_1.sqlite"
+    if history_db.exists() and (updated_files > 0 or updated_threads > 0):
+        h_conn = None
+        try:
+            h_conn = sqlite3.connect(str(history_db))
+            with h_conn:
+                h_c = h_conn.cursor()
+                h_c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='thread_history_projection_state';")
+                if h_c.fetchone():
+                    h_c.execute("DELETE FROM thread_items;")
+                    h_c.execute("DELETE FROM thread_turns;")
+                    h_c.execute("DELETE FROM thread_history_projection_state;")
+        except Exception:
+            pass
+        finally:
+            if h_conn:
+                h_conn.close()
+
     print(f"Synced {updated_threads} SQLite threads and {updated_files} session files to provider '{target_provider}'.")
     return 1 if had_errors else 0
 

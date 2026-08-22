@@ -139,7 +139,7 @@ try {
     }
     $State_ConfigModified = $true
 
-    # 3. Models cache template
+    # 3. Models cache template & Default Compat Auths
     Write-Host "`n=== [3/6] Cau hinh & Khoa READ-ONLY ~/.codex/models_cache.json ===" -ForegroundColor Cyan
     $TemplateJson = Join-Path $ScriptDir "docs\models_cache_template.json"
     if (-not (Test-Path $TemplateJson)) {
@@ -148,10 +148,60 @@ try {
     if (Test-Path $ModelsCachePath) {
         Set-ItemProperty -Path $ModelsCachePath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
     }
-    Copy-Item -Path $TemplateJson -Destination $ModelsCachePath -Force
+
+    # Tu dong nhan dien phien ban Codex CLI hien tai de dong bo client_version, tranh loi cache version mismatch
+    $CodexVer = "0.149.0"
+    try {
+        $VerOut = & codex --version 2>$null
+        if ($VerOut -match '(\d+\.\d+\.\d+)') {
+            $CodexVer = $Matches[1]
+        }
+    } catch {}
+
+    $TemplateData = Get-Content $TemplateJson -Raw -Encoding UTF8 | ConvertFrom-Json
+    $TemplateData.client_version = $CodexVer
+    $JsonContent = $TemplateData | ConvertTo-Json -Depth 30
+    [IO.File]::WriteAllText($ModelsCachePath, $JsonContent, (New-Object System.Text.UTF8Encoding($false)))
     Set-ItemProperty -Path $ModelsCachePath -Name IsReadOnly -Value $true
     $State_CacheModified = $true
-    Write-Host "-> Da nap 6 models & KHOA READ-ONLY thanh cong vao models_cache.json." -ForegroundColor Green
+
+    $AuthsDir = Join-Path $ScriptDir "auths"
+    if (-not (Test-Path $AuthsDir)) {
+        New-Item -ItemType Directory -Path $AuthsDir -Force | Out-Null
+    }
+    $ZenAuthPath = Join-Path $AuthsDir "openai-compatible-opencode-zen.json"
+    if (-not (Test-Path $ZenAuthPath)) {
+        $ZenAuthJson = @'
+{
+  "type": "openai-compatible",
+  "provider": "openai-compatible-opencode-zen",
+  "name": "opencode-zen",
+  "url": "https://opencode.ai/zen/v1",
+  "base_url": "https://opencode.ai/zen/v1",
+  "key": "public",
+  "api_key": "public",
+  "models": [
+    "x-preview-f-free",
+    "ox-alpha"
+  ]
+}
+'@
+        Set-Content -Path $ZenAuthPath -Value $ZenAuthJson -Encoding utf8
+    }
+
+    $ModelCount = 0
+    try {
+        $TemplateData = Get-Content $TemplateJson -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ModelCount = $TemplateData.models.Count
+    } catch {
+        $ModelCount = 0
+    }
+
+    if ($ModelCount -gt 0) {
+        Write-Host "-> Da nap $ModelCount dinh nghia model & KHOA READ-ONLY cache menu cho Codex CLI." -ForegroundColor Green
+    } else {
+        Write-Host "-> Da nap danh muc model & KHOA READ-ONLY cache menu cho Codex CLI." -ForegroundColor Green
+    }
 
     # 4. Sync sessions & Verify
     Write-Host "`n=== [4/6] Dong bo & Xac minh lich su chat sang 'custom' ===" -ForegroundColor Cyan
@@ -228,12 +278,17 @@ function global:aic { python "$AicPy" `$args }
     Write-Host "`n============================================================" -ForegroundColor Green
     Write-Host "   CAI DAT & DANG KY LENH TOAN CUC 'aic' THANH CONG 100%!" -ForegroundColor Green
     Write-Host "============================================================" -ForegroundColor Green
-    Write-Host "Bay gio ban co the mo Terminal tai BAT KY THU MUC NAO va dung:"
-    Write-Host "  - Bat dau chat:      codex"
-    Write-Host "  - Kiem tra he thong: aic status"
-    Write-Host "  - Chay kiem thu:     aic test"
-    Write-Host "  - Tat / Bat proxy:   aic stop  /  aic start"
-    Write-Host "  - Khoi phuc goc:     aic uninstall`n"
+    Write-Host "Cac buoc tiep theo:"
+    Write-Host "  1. Nap tai khoan vao pool (Neu chua co):"
+    Write-Host "     - Google Antigravity: aic login_agy"
+    Write-Host "     - OpenAI Codex:       aic login_codex"
+    Write-Host "     - Ox Alpha:           San sang su dung ngay (Mien phi, khong can login)"
+    Write-Host "`n  2. Bat dau su dung:"
+    Write-Host "     - Khoi chay Codex:    codex"
+    Write-Host "     - Kiem tra he thong:  aic status"
+    Write-Host "     - Chay kiem thu:      aic test"
+    Write-Host "     - Tat / Bat proxy:    aic stop  /  aic start"
+    Write-Host "     - Khoi phuc goc:      aic uninstall`n"
 }
 catch {
     Invoke-Rollback $_.Exception.Message

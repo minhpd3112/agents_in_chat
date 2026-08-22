@@ -177,3 +177,87 @@ sandbox = "elevated"
 * **Giải pháp xử lý triệt để:**
   * **Giải pháp 1 (Nạp tài khoản):** Đăng nhập lại tài khoản tương ứng qua `aic login_codex` để Proxy chấp nhận handshake model switch.
   * **Giải pháp 2 (Override session state):** Cập nhật trực tiếp trường `model` trong các khối `turn_context` và `thread_settings_applied` ở các dòng cuối file session `.jsonl` sang model đích (`claude-sonnet-4.6-thinking` hoặc `gemini-3.7-flash`) để phá vỡ vòng lặp kẹt model.
+
+---
+
+### 12. Tích hợp Mô hình Miễn phí Ngoại vi qua Chuẩn `OpenAI-Compatibility` (Mô hình Ox Alpha 1M Context từ OpenCode Zen)
+* **Bản chất mô hình & Hạ tầng nguồn:**
+  * Mô hình **Ox Alpha** (ID nội bộ: `x-preview-f-free`) là mô hình thử nghiệm reasoning (CoT) chuyên sâu cho coding với context window lên tới **1.048.576 tokens (1M Context)** và output 131.072 tokens.
+  * Hạ tầng Backend: **OpenCode Zen API** (`https://opencode.ai/zen/v1/chat/completions`), hỗ trợ truy cập mở với header `Authorization: Bearer public` không yêu cầu đăng nhập hay tạo tài khoản.
+* **Cơ chế chuyển tiếp Responses API $\leftrightarrow$ OpenAI Chat Completions:**
+  1. *Cấu hình Upstream Provider (`config.yaml`):* Khai báo entry `openai-compatibility` với endpoint `https://opencode.ai/zen/v1`, bearer key `public`, alias mapping `x-preview-f-free` $\rightarrow$ `ox-alpha`.
+  2. *Biên dịch Giao thức Luồng (SSE Protocol Translation):* CLIProxyAPI tự động dịch chuyển gói tin Responses API (`/v1/responses`) từ Codex CLI sang định dạng Chat Completions SSE của OpenCode Zen, đồng thời stream lại các block `reasoning_summary` và reasoning tokens về TUI của Codex CLI.
+  3. *Đăng ký Xác thực trong Auth Manager (`auths/`):* Bộ điều phối luồng của Proxy yêu cầu file cấu hình xác thực `auths/openai-compatible-opencode-zen.json` để đăng ký candidate cho provider `openai-compatible-opencode-zen` (tránh lỗi 503 `auth_unavailable`). File này được tự động tạo bởi `bin/aic.py`, `install.ps1`, và `install.sh`.
+  4. *Tương thích Cache Model (`models_cache_template.json`):* Nạp model `ox-alpha` vào cache `~/.codex/models_cache.json` với `visibility: "list"`, `context_window: 1048576`, và `supported_reasoning_levels: ["low", "high", "max"]` (mặc định: `max`).
+  5. *Đồng bộ Lịch sử (Cross-Model Seamless Switching):* Cho phép người dùng chuyển đổi mượt mà giữa Gemini 3.7 Flash, Claude Sonnet 4.6, Claude Opus 4.6, GPT Sol, GPT Terra, GPT Luna và Ox Alpha trên cùng một phiên làm việc Codex CLI mà không bị đứt đoạn lịch sử chat.
+
+---
+
+### 13. Lỗi Lệch Con trỏ Byte / Ordinal khi Rẽ nhánh Hội thoại (`/fork`) & `thread_history_projection_state`
+* **Hiện tượng:**
+  * Khi người dùng gõ lệnh `/fork` trong Codex CLI để nhân bản đoạn chat sang nhánh mới, TUI báo lỗi:
+    ```text
+    ■ Failed to fork current session through the app server: thread/fork failed during TUI bootstrap:
+    thread/fork failed: failed to prepare paginated fork: thread-store internal error:
+    thread history projection for 01a01ebd-7357-7162-b1e7-15dce576a1b4 expected ordinal 1463, got 1472;
+    1 rejected rollout lines cannot cover that gap (code -32603)
+    ```
+* **Bản chất kỹ thuật & Phân tích nguyên nhân:**
+  1. *Cơ chế lưu trữ của Codex CLI (`thread_history_1.sqlite`):* Codex CLI sử dụng cơ sở dữ liệu `~/.codex/thread_history_1.sqlite` để đánh chỉ mục (index cache) vị trí byte (`next_rollout_byte_offset`) và số thứ tự dòng (`next_rollout_ordinal`) của các session `.jsonl`.
+  2. *Lệch vị trí sau khi thay đổi kích thước file (Stale Offset Mismatch):* Khi các session `.jsonl` được đồng bộ, nén ngữ cảnh (compaction) hoặc làm sạch token định tuyến, kích thước file trên đĩa thay đổi khiến chỉ mục byte trong `thread_history_1.sqlite` bị lệch so với dữ liệu thực tế.
+  3. *Lỗi đứt đoạn khi Fork (Projection Gap):* Khi nhận lệnh `/fork`, Codex CLI nhảy tới vị trí byte đã lưu trong cache SQLite thay vì đọc từ đầu file, dẫn đến việc bỏ qua một số dòng và gây ra lỗi `expected ordinal X, got Y`.
+* **Giải pháp xử lý triệt để:**
+  * **Tự động làm sạch chỉ mục cache (`sync_sessions.py`):** Mỗi khi script đồng bộ `sync_sessions.py` ghi đè file session `.jsonl`, hệ thống sẽ tự động dọn dẹp các bảng cache tạm (`thread_items`, `thread_turns`, `thread_history_projection_state`) trong `thread_history_1.sqlite`.
+  * **Tự xây dựng lại chỉ mục (Zero-Loss On-Demand Projection):** Codex CLI sẽ tự động quét lại toàn bộ file `.jsonl` từ byte 0 và tính toán lại chính xác 100% vị trí các dòng khi người dùng thực hiện `/fork` mà không gây mất mát dữ liệu.
+
+---
+
+### 14. Cơ chế Đánh giá Tính Hợp lệ của Cache Model & Lỗi Lệch Phiên bản Client (`cache version mismatch`)
+* **Hiện tượng:**
+  * Khi Codex CLI tự động nâng cấp (ví dụ: từ `v0.148.0` lên `v0.149.0`), mặc dù file `~/.codex/models_cache.json` đã được cài đặt và khóa `Read-Only`, khi gõ lệnh `/model`, TUI vẫn hiển thị menu mặc định nguyên bản của OpenAI (như Gemini hiện `Minimal, Low, Medium, High`, Claude hiện `Extra high`).
+* **Bản chất kỹ thuật (Kiểm chứng qua nhị phân `codex.exe`):**
+  * Trong mã nguồn Rust của Codex CLI (`models-manager\src\manager.rs`), hàm `load_cache` kiểm tra trường `"client_version"` trong `models_cache.json`.
+  * Nếu `client_version` trong file cache không khớp với phiên bản binary đang chạy (`0.148.0` $\neq$ `0.149.0`), runtime lập tức kích hoạt luồng log:
+    ```text
+    models cache: loaded cache file
+    models cache: cache version mismatch
+    models cache: no usable cache entry -> fetching remote models / using fallback builtins
+    ```
+  * Khi đó, Codex CLI coi file cache trên đĩa là "không hợp lệ/hết hạn" và tự động nạp cấu hình cứng tích hợp bên trong binary.
+* **Giải pháp tự động hóa triệt để:**
+  * **Tự động trích xuất phiên bản (`codex --version`):** Trong [`install.ps1`](file:///E:/AI/agents_in_chat/install.ps1) và [`install.sh`](file:///E:/AI/agents_in_chat/install.sh), hệ thống tự động chạy `codex --version` để lấy số phiên bản thực tế của máy tính người dùng và ghi động vào trường `"client_version"` trước khi khóa `Read-Only`.
+  * **Chống lệch phiên bản khi nâng cấp:** Đảm bảo dù Codex CLI được nâng cấp lên bất kỳ phiên bản nào (0.150, 0.151,...), chỉ cần chạy `install.ps1` hoặc `aic restart`, hệ thống sẽ luôn đồng bộ 100%.
+
+---
+
+### 15. Ràng buộc Mức Suy luận Của OpenCode Zen Backend & Xử lý Lỗi HTTP 400 (`[1210]`)
+* **Hiện tượng:**
+  * Khi gửi request đến mô hình `Ox Alpha` (`x-preview-f-free`) với tham số `reasoning_effort: "medium"`, máy chủ OpenCode Zen từ chối với mã lỗi:
+    ```json
+    HTTP Error 400: {"error":{"type":"server_error","message":"Error from provider (Console): Upstream request failed: [1210] This model always engages in thinking and cannot be disabled; please use low, high, or max"}}
+    ```
+* **Bản chất backend OpenCode Zen:**
+  * Cụm máy chủ OpenCode Zen Backend chỉ thiết kế chấp nhận 3 giá trị định danh suy luận cụ thể: **`low`**, **`high`**, và **`max`** (hoặc `default` khi bỏ trống trường `reasoning_effort`).
+  * Backend hoàn toàn không hỗ trợ nấc `medium` cho mô hình stealth reasoning `x-preview-f-free`.
+* **Giải pháp chuẩn hóa:**
+  * Trong [`docs/models_cache_template.json`](file:///E:/AI/agents_in_chat/docs/models_cache_template.json), danh sách `supported_reasoning_levels` cho `ox-alpha` được cấu hình độc lập gồm đúng 3 nấc: `["low", "high", "max"]` với mặc định là `"max"`.
+  * Điều này loại bỏ hoàn toàn nguy cơ gửi nhầm cờ `medium` và giúp mô hình phản hồi mượt mà ở mọi nấc lựa chọn.
+
+---
+
+### 16. Tối ưu Công thái học Thao tác TUI (Ergonomic Default Reasoning Levels)
+* **Yêu cầu thực tế:**
+  * Người dùng thường xuyên thao tác nhanh trên bàn phím bằng phím `Enter` khi chọn mô hình. Nếu mức suy luận mặc định nằm ở nấc thấp hoặc trung bình, người dùng phải bấm thêm phím mũi tên điều hướng.
+* **Cấu hình tối ưu hóa theo mô hình:**
+  1. **Nhóm Anthropic Claude (`claude-sonnet-4.6`, `claude-opus-4.6`):**
+     * Đặt `default_reasoning_level: "high"`.
+     * Loại bỏ nấc dư thừa `xhigh` $\rightarrow$ Menu chỉ hiển thị gọn gàng `[Low, Medium, High (default)]`.
+  2. **Nhóm Google Gemini (`gemini-3.7-flash`):**
+     * Đặt `default_reasoning_level: "high"`.
+     * Menu hiển thị `[Low, Medium, High (default)]`.
+  3. **Nhóm OpenCode Zen (`ox-alpha`):**
+     * Đặt `default_reasoning_level: "max"`.
+     * Menu hiển thị `[Low, High, Max (default)]`.
+* **Hiệu quả:**
+  * Người dùng chỉ cần gõ `/model`, chọn mô hình mong muốn và nhấn `Enter` là hệ thống tự động kích hoạt mức suy luận cao nhất/sâu nhất mà không cần thêm bất kỳ thao tác bấm phím nào.
+

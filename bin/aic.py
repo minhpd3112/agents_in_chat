@@ -37,7 +37,25 @@ def check_proxy_health():
         pass
     return False, []
 
+def ensure_default_compat_auth():
+    auth_dir = ROOT_DIR / "auths"
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    zen_auth = auth_dir / "openai-compatible-opencode-zen.json"
+    if not zen_auth.exists():
+        auth_data = {
+            "type": "openai-compatible",
+            "provider": "openai-compatible-opencode-zen",
+            "name": "opencode-zen",
+            "url": "https://opencode.ai/zen/v1",
+            "base_url": "https://opencode.ai/zen/v1",
+            "key": "public",
+            "api_key": "public",
+            "models": ["x-preview-f-free", "ox-alpha"]
+        }
+        zen_auth.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
+
 def cmd_start() -> int:
+    ensure_default_compat_auth()
     online, _ = check_proxy_health()
     if online:
         print("[AIC] Proxy API Service da dang hoat dong san sang.")

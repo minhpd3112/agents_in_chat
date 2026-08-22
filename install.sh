@@ -102,9 +102,51 @@ fi
 
 mkdir -p "$CODEX_DIR"
 chmod 644 "$MODELS_CACHE" 2>/dev/null || true
-cp -f "$TEMPLATE_JSON" "$MODELS_CACHE"
+"$PYTHON_BIN" -c "
+import json, subprocess, re
+template_path = '$TEMPLATE_JSON'
+cache_path = '$MODELS_CACHE'
+ver = '0.149.0'
+try:
+    p = subprocess.run(['codex', '--version'], capture_output=True, text=True)
+    m = re.search(r'(\d+\.\d+\.\d+)', p.stdout)
+    if m: ver = m.group(1)
+except Exception: pass
+with open(template_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+data['client_version'] = ver
+with open(cache_path, 'w', encoding='utf-8', newline='\n') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || cp -f "$TEMPLATE_JSON" "$MODELS_CACHE"
 chmod 444 "$MODELS_CACHE"
-echo "-> Da nap 6 models & KHOA READ-ONLY thanh cong vao models_cache.json."
+
+AUTHS_DIR="$SCRIPT_DIR/auths"
+mkdir -p "$AUTHS_DIR"
+ZEN_AUTH="$AUTHS_DIR/openai-compatible-opencode-zen.json"
+if [ ! -f "$ZEN_AUTH" ]; then
+    cat << 'EOF' > "$ZEN_AUTH"
+{
+  "type": "openai-compatible",
+  "provider": "openai-compatible-opencode-zen",
+  "name": "opencode-zen",
+  "url": "https://opencode.ai/zen/v1",
+  "base_url": "https://opencode.ai/zen/v1",
+  "key": "public",
+  "api_key": "public",
+  "models": [
+    "x-preview-f-free",
+    "ox-alpha"
+  ]
+}
+EOF
+fi
+
+MODEL_COUNT=$("$PYTHON_BIN" -c "import json; print(len(json.load(open('$TEMPLATE_JSON', encoding='utf-8')).get('models', [])))" 2>/dev/null || echo "")
+if [ -n "$MODEL_COUNT" ] && [ "$MODEL_COUNT" -gt 0 ] 2>/dev/null; then
+    echo "-> Da nap $MODEL_COUNT dinh nghia model & KHOA READ-ONLY cache menu cho Codex CLI."
+else
+    echo "-> Da nap danh muc model & KHOA READ-ONLY cache menu cho Codex CLI."
+fi
 
 echo "=== [4/6] Dong bo & Xac minh lich su chat sang provider 'custom' ==="
 "$PYTHON_BIN" "$SYNC_SCRIPT" custom || rollback
@@ -121,6 +163,26 @@ else
     echo "-> Da tao symlink toan cuc 'aic' tai $BIN_LINK_DIR/aic"
 fi
 
+# Register alias in ~/.bashrc or ~/.zshrc
+PROFILE_FILE=""
+if [ -n "$AIC_PROFILE_PATH" ]; then
+    PROFILE_FILE="$AIC_PROFILE_PATH"
+elif [ -f "$HOME/.zshrc" ]; then
+    PROFILE_FILE="$HOME/.zshrc"
+elif [ -f "$HOME/.bashrc" ]; then
+    PROFILE_FILE="$HOME/.bashrc"
+fi
+
+if [ -n "$PROFILE_FILE" ]; then
+    if ! grep -q "alias aic=" "$PROFILE_FILE" 2>/dev/null; then
+        echo "" >> "$PROFILE_FILE"
+        echo "# >>> AIC >>>" >> "$PROFILE_FILE"
+        echo "alias aic=\"$PYTHON_BIN $SCRIPT_DIR/bin/aic.py\"" >> "$PROFILE_FILE"
+        echo "# <<< AIC <<<" >> "$PROFILE_FILE"
+        echo "-> Da dang ky alias 'aic' vao $PROFILE_FILE"
+    fi
+fi
+
 echo "=== [6/6] Khoi dong CLIProxyAPI ==="
 if [ "$AIC_FAIL_STEP" = "start" ]; then
     echo "[FAIL_INJECTION] Injected failure at start"
@@ -134,12 +196,20 @@ else
     echo "-> [TEST_MODE] Bo qua khoi dong proxy."
 fi
 
+echo ""
 echo "============================================================"
 echo "   CAI DAT & DANG KY LENH TOAN CUC 'aic' THANH CONG 100%!"
 echo "============================================================"
-echo "Bay gio ban co the mo Terminal tai BAT KY THU MUC NAO va dung:"
-echo "  - Bat dau chat:      codex"
-echo "  - Kiem tra he thong: aic status"
-echo "  - Chay kiem thu:     aic test"
-echo "  - Tat / Bat proxy:   aic stop  /  aic start"
-echo "  - Khoi phuc goc:     aic uninstall"
+echo "Cac buoc tiep theo:"
+echo "  1. Nap tai khoan vao pool (Neu chua co):"
+echo "     - Google Antigravity: aic login_agy"
+echo "     - OpenAI Codex:       aic login_codex"
+echo "     - Ox Alpha:           San sang su dung ngay (Mien phi, khong can login)"
+echo ""
+echo "  2. Bat dau su dung:"
+echo "     - Khoi chay Codex:    codex"
+echo "     - Kiem tra he thong:  aic status"
+echo "     - Chay kiem thu:      aic test"
+echo "     - Tat / Bat proxy:    aic stop  /  aic start"
+echo "     - Khoi phuc goc:      aic uninstall"
+echo ""

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-import os
-import sys
-import re
-import json
-import hashlib
-import time
+"""Codex config.toml manager: install/restore/backup with byte-exact safety.
+
+Status goes to stderr so stdout stays clean for scripting.
+"""
+
 import argparse
+import hashlib
+import json
+import os
+import re
 import shutil
+import sys
+import time
 from pathlib import Path
+
+from log_utils import error, info, warn
 
 def get_codex_dir(custom_path=None) -> Path:
     if custom_path:
@@ -45,29 +52,29 @@ def validate_existing_manifest(manifest_path: Path, backup_file: Path) -> tuple[
         raw_manifest = manifest_path.read_bytes()
         manifest_data = json.loads(raw_manifest.decode("utf-8"))
     except Exception as e:
-        print(f"[ERROR] Manifest bi hong hoac khong dung JSON: {e}")
+        error(f"corrupt backup manifest: {e}")
         return False, {}
 
     if not isinstance(manifest_data, dict):
-        print(f"[ERROR] Manifest root must be a JSON object!")
+        error("manifest root must be a JSON object")
         return False, {}
 
     orig_exists = manifest_data.get("original_exists")
     if not isinstance(orig_exists, bool):
-        print(f"[ERROR] Manifest field 'original_exists' must be boolean!")
+        error("manifest field 'original_exists' must be boolean")
         return False, {}
 
     if orig_exists:
         if not backup_file.exists():
-            print(f"[ERROR] Manifest ghi nhan config ton tai nhung khong tim thay file {backup_file}!")
+            error(f"manifest says config existed but backup file is missing: {backup_file}")
             return False, {}
         expected_sha = manifest_data.get("sha256")
         if not expected_sha:
-            print(f"[ERROR] Manifest missing 'sha256' checksum field!")
+            error("manifest missing 'sha256' checksum field")
             return False, {}
         actual_sha = compute_sha256_file(backup_file)
         if actual_sha != expected_sha:
-            print(f"[ERROR] Backup checksum mismatch! Expected: {expected_sha}, Actual: {actual_sha}")
+            error(f"backup checksum mismatch (expected {expected_sha[:8]}..., got {actual_sha[:8]}...)")
             return False, {}
 
     return True, manifest_data
@@ -83,7 +90,7 @@ def ensure_backup(codex_dir: Path) -> bool:
     if manifest_path.exists():
         valid, _ = validate_existing_manifest(manifest_path, backup_file)
         if not valid:
-            print("[ERROR] Backup manifest hien co bi hong! Aborting install.")
+            error("backup manifest is corrupt; aborting install")
             return False
         return True
 
@@ -101,7 +108,7 @@ def ensure_backup(codex_dir: Path) -> bool:
         }
         manifest_bytes = json.dumps(manifest_data, indent=2).encode("utf-8")
         atomic_write_bytes(manifest_path, manifest_bytes)
-        print(f"[OK] Da tao backup ban dau tai {backup_file} (SHA256: {actual_sha[:8]}...)")
+        info(f"saved initial config.toml backup (sha256 {actual_sha[:8]})")
     else:
         manifest_data = {
             "original_exists": False,
@@ -110,7 +117,7 @@ def ensure_backup(codex_dir: Path) -> bool:
         }
         manifest_bytes = json.dumps(manifest_data, indent=2).encode("utf-8")
         atomic_write_bytes(manifest_path, manifest_bytes)
-        print("[OK] Ghi nhan trang thai ban dau khong co config.toml.")
+        info("no pre-existing config.toml; recorded clean-install state")
 
     return True
 
@@ -191,13 +198,13 @@ def configure_custom(codex_dir: Path) -> int:
 
     final_text = "\n".join(lines).strip() + "\n\n" + "\n\n".join(output_sections).strip() + "\n"
     atomic_write_bytes(config_path, final_text.encode("utf-8"))
-    print("Cleaned and configured config.toml for provider: 'custom'!")
+    info("config.toml configured for provider 'custom'")
     return 0
 
 
 def restore_original(codex_dir: Path) -> int:
     if os.environ.get("AIC_TEST_MODE") == "1" and os.environ.get("AIC_FAIL_STEP") == "restore-config":
-        print("[FAIL_INJECTION] Injected failure at restore-config")
+        info("injected failure at restore-config")
         return 1
 
     backup_dir = codex_dir / "aic-backup"
@@ -209,31 +216,31 @@ def restore_original(codex_dir: Path) -> int:
     if manifest_path.exists():
         valid, manifest_data = validate_existing_manifest(manifest_path, backup_file)
         if not valid:
-            print("[ERROR] Khong the khoi phuc vi backup manifest bi loi!")
+            error("cannot restore: backup manifest invalid")
             return 1
 
         if manifest_data.get("original_exists"):
             raw_backup_bytes = backup_file.read_bytes()
             atomic_write_bytes(config_path, raw_backup_bytes)
-            print("[OK] Da khoi phuc chinh xac config.toml goc tu backup ban dau (byte-exact).")
+            info("restored original config.toml from backup (byte-exact)")
             return 0
         else:
             if config_path.exists():
                 config_path.unlink()
-            print("[OK] Da go bo config.toml vi ban dau nguoi dung chua tung tao file nay.")
+            info("removed config.toml (none existed before install)")
             return 0
 
     # Mode 2: Legacy Fallback (No backup manifest found)
-    print("[WARN] Khong tim thay backup manifest, tien hanh don dep an toan (Legacy Fallback)...")
+    warn("no backup manifest found; using legacy fallback cleanup")
     if not config_path.exists():
-        print("[OK] Khong co config.toml de xu ly.")
+        info("no config.toml to process")
         return 0
 
     try:
         raw_bytes = config_path.read_bytes()
         recovery_path = codex_dir / f"config.toml.recovery.{int(time.time())}"
         atomic_write_bytes(recovery_path, raw_bytes)
-        print(f"[INFO] Da tao recovery copy tai {recovery_path}")
+        info(f"recovery copy saved: {recovery_path.name}")
 
         try:
             text = raw_bytes.decode("utf-8-sig")
@@ -266,10 +273,10 @@ def restore_original(codex_dir: Path) -> int:
         final_text += "\n"
 
         atomic_write_bytes(config_path, final_text.encode("utf-8"))
-        print("[OK] Da lam sach cac muc cua AIC trong top-level va bao toan 100% cac section nguoi dung.")
+        info("cleaned AIC keys from top-level; preserved all user sections")
         return 0
     except Exception as e:
-        print(f"[ERROR] Legacy fallback gap loi: {e}")
+        error(f"legacy fallback failed: {e}")
         return 1
 
 
@@ -278,9 +285,9 @@ def clean_backup_dir(codex_dir: Path) -> int:
     if backup_dir.exists():
         try:
             shutil.rmtree(backup_dir)
-            print("[OK] Da don dep thu muc aic-backup sau khi uninstall thanh cong.")
+            info("cleaned aic-backup directory")
         except Exception as e:
-            print(f"[WARN] Khong the xoa aic-backup: {e}")
+            warn(f"could not remove aic-backup: {e}")
             return 1
     return 0
 
@@ -304,7 +311,7 @@ def main() -> int:
     elif action in ["clean-backup", "clean_backup"]:
         return clean_backup_dir(codex_dir)
     else:
-        print(f"[ERROR] Unknown action: {action}")
+        error(f"unknown action: {action}")
         return 2
 
 

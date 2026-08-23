@@ -25,6 +25,9 @@ def get_root_dir() -> Path:
 ROOT_DIR = get_root_dir()
 CODEX_DIR = Path(os.path.expanduser("~/.codex"))
 
+sys.path.insert(0, str(ROOT_DIR / "scripts"))
+from log_utils import error, info, warn  # noqa: E402
+
 def check_proxy_health():
     try:
         req = urllib.request.Request("http://127.0.0.1:8080/v1/models", headers={"User-Agent": "aic-cli"})
@@ -62,7 +65,7 @@ def run_auth_backup_hook(action: str) -> int:
         res = subprocess.run([sys.executable, "-B", str(hook_script), action], cwd=str(ROOT_DIR))
         return res.returncode
     except Exception as e:
-        print(f"[WARNING] Auth backup hook '{action}' gap loi: {e}")
+        warn(f"auth backup hook '{action}' failed: {e}")
         return 0
 
 def cmd_start() -> int:
@@ -71,10 +74,10 @@ def cmd_start() -> int:
     run_auth_backup_hook("restore")
     online, _ = check_proxy_health()
     if online:
-        print("[AIC] Proxy API Service da dang hoat dong san sang.")
+        info("proxy service already running")
         return 0
 
-    print("[AIC] Dang khoi dong Proxy API Service chay ngam 100% (an hoan toan)...")
+    info("starting proxy service...")
     if sys.platform == "win32":
         ps_script = ROOT_DIR / "start.ps1"
         res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
@@ -91,14 +94,14 @@ def cmd_start() -> int:
         time.sleep(1)
         ok, models = check_proxy_health()
         if ok:
-            print(f"[OK] CLIProxyAPI da khoi dong thanh cong ({len(models)} models online)")
+            info(f"proxy started ({len(models)} models online)")
             return 0
-    print("[WARNING] Da chay binary nhung dich vu proxy chua phan hoi.")
+    warn("binary launched but proxy not responding")
     return 1
 
 
 def cmd_stop() -> int:
-    print("[AIC] Dang tat Proxy API Service...")
+    info("stopping proxy service...")
     if sys.platform == "win32":
         ps_script = ROOT_DIR / "stop.ps1"
         res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
@@ -122,6 +125,10 @@ def cmd_status() -> int:
     print(f"  AGENTS IN CHAT (AIC) SYSTEM STATUS  |  v{VERSION}")
     print("=" * 65)
 
+    # Auth count is needed by both the Provider label and section 4
+    auths_dir = ROOT_DIR / "auths"
+    auth_count = len(list(auths_dir.glob("*.json"))) if auths_dir.exists() else 0
+
     # 1. Proxy
     online, models = check_proxy_health()
     if online:
@@ -138,7 +145,7 @@ def cmd_status() -> int:
         try:
             content = config_file.read_text(encoding="utf-8")
             if "model_provider = \"custom\"" in content:
-                provider_str = "custom (Agents Quota Pool - 10 OAuth Accounts)"
+                provider_str = f"custom (Agents Quota Pool - {auth_count} OAuth Accounts)"
             elif "model_provider = \"openai\"" in content:
                 provider_str = "openai (Vanilla OpenAI Native)"
         except Exception:
@@ -159,8 +166,6 @@ def cmd_status() -> int:
         print(f"[LOCK] Models Cache Protection    : File cache chua duoc tao")
 
     # 4. Auth Accounts
-    auths_dir = ROOT_DIR / "auths"
-    auth_count = len(list(auths_dir.glob("*.json"))) if auths_dir.exists() else 0
     print(f"[AUTH] OAuth Quota Accounts       : {auth_count} tai khoan san sang")
     print("=" * 65)
     return 0 if online else 1
@@ -225,7 +230,7 @@ def run_login_filtered(args) -> int:
         proc.stdout.close()
         return proc.wait()
     except KeyboardInterrupt:
-        print("\n[AIC] Da huy thao tac dang nhap.")
+        info("login cancelled")
         return 130
 
 def cmd_login_agy() -> int:
@@ -258,9 +263,9 @@ def cmd_login_codex(mode=None) -> int:
         print("  [2] Device Code Flow   (Nhap ma xac thuc tren auth.openai.com/codex/device)")
         print("-" * 68)
         try:
-            choice = input("Lua chon cua ban [1/2] (Mac dinh: 1): ").strip()
+            choice = input("Lua chon cua ban: ").strip()
         except (KeyboardInterrupt, EOFError):
-            print("\n[AIC] Da huy thao tac dang nhap.")
+            info("login cancelled")
             return 130
         except Exception:
             choice = "1"
@@ -281,7 +286,40 @@ def cmd_login_codex(mode=None) -> int:
     return run_login_filtered(args)
 
 
-HELP_TEXT = f"""
+def _suite_count():
+    try:
+        sys.path.insert(0, str(ROOT_DIR / "tests"))
+        import run_tests
+        return len(run_tests.SUITES)
+    except Exception:
+        return 0
+
+
+def _model_lines():
+    tpl = ROOT_DIR / "docs" / "models_cache_template.json"
+    try:
+        data = json.loads(tpl.read_text(encoding="utf-8"))
+        lines = []
+        for i, m in enumerate(data.get("models", []), 1):
+            slug = m.get("slug", "?")
+            disp = m.get("display_name", "")
+            lines.append(f"  {i}. {slug:<30} ({disp})" if disp else f"  {i}. {slug}")
+        return lines
+    except Exception:
+        return []
+
+
+def build_help_text():
+    n = _suite_count()
+    test_line = f"  aic test        - Chay bo kiem thu tu dong ({n} test suites)" if n else "  aic test        - Chay bo kiem thu tu dong"
+    model_lines = _model_lines()
+    if model_lines:
+        header = f"Danh sach {len(model_lines)} model trong menu /model cua Codex CLI (theo models_cache_template):"
+        model_block = "\n".join([header] + model_lines)
+    else:
+        model_block = "Danh sach model: khong doc duoc docs/models_cache_template.json"
+
+    return f"""
 ======================================================================
                AGENTS IN CHAT (AIC) CLI MANAGER v{VERSION}
 ======================================================================
@@ -292,23 +330,18 @@ Cac lenh kha dung:
   aic stop        - Tat Proxy API va giai phong RAM tai nguyen
   aic restart     - Khoi dong lai Proxy API Service
   aic status      - Kiem tra tinh trang he thong (Proxy, Provider, Cache)
-  aic test        - Chay bo kiem thu tu dong 7/7 test suites
+{test_line}
   aic login_agy   - Dang nhap Google Antigravity (Gemini Flash & Claude Sonnet/Opus)
   aic login_codex - Dang nhap OpenAI Codex (Tuy chon: Browser hoac Device Code)
   aic uninstall   - Khoi phuc cau hinh OpenAI goc va bao toan lich su chat de resume
 
-Danh sach 6 model ho tro trong menu /model cua Codex CLI:
-  1. gemini-3.7-flash            (High Thinking, Function Calling)
-  2. claude-sonnet-4.6-thinking  (Deep Reasoning, Tool Calling)
-  3. claude-opus-4.6-thinking    (Ultra Thinking Architecture)
-  4. gpt-5.6-sol                 (Flagship Frontier)
-  5. gpt-5.6-terra               (Balanced Agentic)
-  6. gpt-5.6-luna                (Fast & Lightweight)
+{model_block}
 ======================================================================
 """
 
+
 def print_help() -> int:
-    print(HELP_TEXT.strip())
+    print(build_help_text().strip())
     return 0
 
 def main() -> int:

@@ -74,7 +74,7 @@ sandbox = "elevated"
   pub enum ModelVisibility { List, Hide, None }
   ```
   Codex CLI chỉ kiểm tra: `show_in_picker = (info.visibility == ModelVisibility::List)`.
-* **Giải pháp:** Bắt buộc đặt `"visibility": "list"` cho toàn bộ 6 model trong file cache template.
+* **Giải pháp:** Bắt buộc đặt `"visibility": "list"` cho toàn bộ model trong file cache template.
 
 ---
 

@@ -11,27 +11,27 @@ from test_auth_backup import test_auth_backup
 from test_gemini_tool_calling import test_gemini_tool_calling
 from test_claude_tool_calling import test_claude_tool_calling
 
+SUITES = [
+    ("1. Proxy Health & Endpoint (http://127.0.0.1:8080)", test_proxy_health),
+    ("2. Config YAML (Routing, Retries & Aliases)", test_config_yaml),
+    ("3. Models Cache (BOM Check, TTL 2099 & Tool Specs)", test_models_cache),
+    ("4. Codex config.toml Integrity", test_codex_config),
+    ("5. SQLite DB & Session Headers Provider Sync", test_sqlite_and_sessions),
+    ("6. Session Sync & Atomic Backup/Restore Unit Tests", test_sync_and_backup_unit),
+    ("7. Auth Token Atomic Auto-Backup & Recovery (NUL-byte Fault Injection)", test_auth_backup),
+    ("8. Gemini 3.7 Flash Native Tool Calling (No Silence)", test_gemini_tool_calling),
+    ("9. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
+]
+
 def run_all():
     print("=" * 70)
     print("      AGENTS_IN_CHAT COMPREHENSIVE REGRESSION TEST SUITE")
     print("=" * 70)
 
-    suites = [
-        ("1. Proxy Health & Endpoint (http://127.0.0.1:8080)", test_proxy_health),
-        ("2. Config YAML (Routing, Retries & Aliases)", test_config_yaml),
-        ("3. Models Cache (BOM Check, TTL 2099 & Tool Specs)", test_models_cache),
-        ("4. Codex config.toml Integrity", test_codex_config),
-        ("5. SQLite DB & Session Headers Provider Sync", test_sqlite_and_sessions),
-        ("6. Session Sync & Atomic Backup/Restore Unit Tests (13 Fixtures)", test_sync_and_backup_unit),
-        ("7. Auth Token Atomic Auto-Backup & Recovery (NUL-byte Fault Injection)", test_auth_backup),
-        ("8. Gemini 3.7 Flash Native Tool Calling (No Silence)", test_gemini_tool_calling),
-        ("9. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
-    ]
-
     passed = 0
     start_time = time.time()
 
-    for name, test_fn in suites:
+    for name, test_fn in SUITES:
         print(f"\nRunning: {name}...")
         try:
             ok, msg = test_fn()
@@ -45,10 +45,10 @@ def run_all():
 
     elapsed = time.time() - start_time
     print("\n" + "=" * 70)
-    print(f"TEST SUMMARY: {passed}/{len(suites)} suites passed in {elapsed:.2f}s")
+    print(f"TEST SUMMARY: {passed}/{len(SUITES)} suites passed in {elapsed:.2f}s")
     print("=" * 70)
 
-    if passed == len(suites):
+    if passed == len(SUITES):
         print("ALL TESTS PASSED! Entire system is 100% robust and regression-free.\n")
         return 0
     else:

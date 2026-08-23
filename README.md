@@ -94,5 +94,5 @@ agents_in_chat/
 │   ├── models_cache_template.json # Template 7 models chuẩn
 │   └── KIEN_TRUC_VA_XU_LY_LOI.md # Tài liệu kỹ thuật và xử lý lỗi
 └── tests/
-    └── run_tests.py             # Bộ chạy kiểm thử 8 suites
+    └── run_tests.py             # Bộ chạy kiểm thử suites
 ```

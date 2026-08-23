@@ -14,17 +14,11 @@ import os
 import sys
 from pathlib import Path
 
+from log_utils import info, warn
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 AUTHS_DIR = ROOT_DIR / "auths"
 BACKUP_DIR = ROOT_DIR / "auths_backup"
-
-
-def info(msg: str) -> None:
-    print(msg, file=sys.stderr)
-
-
-def warn(msg: str) -> None:
-    print(f"Warning: {msg}", file=sys.stderr)
 
 
 def is_valid_json_file(path: Path) -> bool:

@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-import sys
+"""Codex session history provider sync & verify helper.
+
+Usage:
+    python sync_sessions.py [--verify] <custom|openai> [--codex-dir <path>]
+
+Status goes to stderr so stdout stays clean for scripting.
+"""
+
+import argparse
+import json
 import os
 import sqlite3
-import json
-import argparse
+import sys
 import time
 from pathlib import Path
+
+from log_utils import error, info
 
 VALID_PROVIDERS = {"custom", "openai"}
 
@@ -21,11 +31,11 @@ def get_codex_dir(custom_path=None) -> Path:
 def sync_provider(target_provider: str, codex_dir: Path) -> int:
     target_provider = target_provider.strip().lower()
     if target_provider not in VALID_PROVIDERS:
-        print(f"[ERROR] Provider khong hop le: '{target_provider}'. Chi chap nhan 'custom' hoac 'openai'.")
+        error(f"invalid provider '{target_provider}' (expected custom|openai)")
         return 2
 
     if os.environ.get("AIC_TEST_MODE") == "1" and os.environ.get("AIC_FAIL_STEP") == f"sync-{target_provider}":
-        print(f"[FAIL_INJECTION] Injected failure at sync-{target_provider}")
+        info(f"injected failure at sync-{target_provider}")
         return 1
 
     db_path = codex_dir / "state_5.sqlite"
@@ -46,7 +56,7 @@ def sync_provider(target_provider: str, codex_dir: Path) -> int:
                     c.execute("UPDATE threads SET model_provider = ? WHERE model_provider IS NOT NULL;", (target_provider,))
                     updated_threads = c.rowcount
         except Exception as e:
-            print(f"[ERROR] Failed to update state_5.sqlite: {e}")
+            error(f"failed to update state_5.sqlite: {e}")
             had_errors = True
         finally:
             if conn:
@@ -136,9 +146,9 @@ def sync_provider(target_provider: str, codex_dir: Path) -> int:
 
     if failed_files:
         had_errors = True
-        print(f"[ERROR] Co {len(failed_files)} file session gap loi khi dong bo:")
+        error(f"{len(failed_files)} session file(s) failed to sync")
         for fp, err in failed_files:
-            print(f"  - {fp}: {err}")
+            info(f"  {os.path.basename(fp)}: {err}")
 
     # 3. Invalidate/clear stale thread_history projection cache if files/threads were updated
     history_db = codex_dir / "thread_history_1.sqlite"
@@ -159,18 +169,18 @@ def sync_provider(target_provider: str, codex_dir: Path) -> int:
             if h_conn:
                 h_conn.close()
 
-    print(f"Synced {updated_threads} SQLite threads and {updated_files} session files to provider '{target_provider}'.")
+    info(f"synced {updated_threads} thread(s), {updated_files} session file(s) -> '{target_provider}'")
     return 1 if had_errors else 0
 
 
 def verify_provider(target_provider: str, codex_dir: Path) -> int:
     target_provider = target_provider.strip().lower()
     if target_provider not in VALID_PROVIDERS:
-        print(f"[ERROR] Provider khong hop le: '{target_provider}'. Chi chap nhan 'custom' hoac 'openai'.")
+        error(f"invalid provider '{target_provider}' (expected custom|openai)")
         return 2
 
     if os.environ.get("AIC_TEST_MODE") == "1" and os.environ.get("AIC_FAIL_STEP") == f"verify-{target_provider}":
-        print(f"[FAIL_INJECTION] Injected failure at verify-{target_provider}")
+        info(f"injected failure at verify-{target_provider}")
         return 1
 
     db_path = codex_dir / "state_5.sqlite"
@@ -224,12 +234,12 @@ def verify_provider(target_provider: str, codex_dir: Path) -> int:
                         errors.append(f"Failed to verify {file_path}: {e}")
 
     if errors:
-        print(f"[FAIL] Verification failed with {len(errors)} issues:")
+        error(f"verification failed: {len(errors)} issue(s)")
         for err in errors:
-            print(f"  - {err}")
+            info(f"  {err}")
         return 1
 
-    print(f"[PASS] Verified {checked_threads} SQLite threads and {checked_files} session files match provider '{target_provider}'.")
+    info(f"verified {checked_threads} thread(s), {checked_files} session file(s) match '{target_provider}'")
     return 0
 
 
@@ -251,7 +261,7 @@ def main() -> int:
         provider = remaining[0]
 
     if not provider:
-        print("Usage: python sync_sessions.py [--verify] <custom|openai> [--codex-dir <path>]")
+        error("usage: sync_sessions.py [--verify] <custom|openai> [--codex-dir <path>]")
         return 2
 
     codex_dir = get_codex_dir(args.codex_dir)

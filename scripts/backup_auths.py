@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# ==============================================================================
-#  backup_auths.py - Atomic Auto-Backup & Recovery for OAuth token files
-#  Event-driven (lifecycle hooks only) -> Zero-RAM overhead, no daemon.
-#
-#  Usage:
-#    python scripts/backup_auths.py backup   # Snapshot valid JSON tokens
-#    python scripts/backup_auths.py restore  # Repair corrupt/missing from backup
-#    python scripts/backup_auths.py verify   # Health report of auths/
-# ==============================================================================
+"""Atomic backup & recovery for OAuth token files in auths/.
+
+Usage:
+    python scripts/backup_auths.py backup   Snapshot valid tokens into auths_backup/
+    python scripts/backup_auths.py restore  Repair corrupt/missing tokens from backup
+    python scripts/backup_auths.py verify   Health report (exit 1 if anything is corrupt)
+
+Status goes to stderr so stdout stays clean for scripting.
+"""
 
 import json
 import os
@@ -19,6 +19,14 @@ AUTHS_DIR = ROOT_DIR / "auths"
 BACKUP_DIR = ROOT_DIR / "auths_backup"
 
 
+def info(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+
+def warn(msg: str) -> None:
+    print(f"Warning: {msg}", file=sys.stderr)
+
+
 def is_valid_json_file(path: Path) -> bool:
     """A token file is healthy iff: >0 bytes, no NUL bytes, parses as JSON."""
     try:
@@ -27,134 +35,113 @@ def is_valid_json_file(path: Path) -> bool:
         raw = path.read_bytes()
         if b"\x00" in raw:
             return False
-        text = raw.decode("utf-8", errors="strict")
-        json.loads(text)
+        json.loads(raw.decode("utf-8"))
         return True
     except (OSError, ValueError, UnicodeDecodeError):
         return False
 
 
 def atomic_write(target: Path, data: bytes) -> bool:
-    """Write bytes via temp file + os.replace to guarantee atomicity."""
-    tmp_path = target.with_name(target.name + ".tmp_backup")
+    tmp = target.with_name(target.name + ".tmp_backup")
     try:
-        with open(tmp_path, "wb") as f:
+        with open(tmp, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(str(tmp_path), str(target))
+        os.replace(str(tmp), str(target))
         return True
     except OSError as e:
-        print(f"[ERROR] Atomic write failed for {target.name}: {e}")
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        warn(f"could not write {target.name}: {e}")
+        tmp.unlink(missing_ok=True)
         return False
 
 
 def cmd_backup(auths_dir: Path = AUTHS_DIR, backup_dir: Path = BACKUP_DIR) -> int:
-    """Copy only 100%-valid JSON files into the backup dir (atomic copy)."""
+    """Snapshot only 100%-valid token files (atomic copy, idempotent)."""
     if not auths_dir.is_dir():
-        print(f"[SKIP] Thu muc {auths_dir} khong ton tai.")
+        info("No auth files to back up")
         return 0
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    backed_up = skipped = 0
+    updated = kept = skipped = 0
     for src in sorted(auths_dir.glob("*.json")):
         if not is_valid_json_file(src):
-            print(f"[SKIP] Bo qua file hong/khong hop le: {src.name}")
             skipped += 1
             continue
         dst = backup_dir / src.name
         data = src.read_bytes()
         if dst.exists() and dst.read_bytes() == data:
-            backed_up += 1  # already identical -> idempotent no-op
+            kept += 1
             continue
         if atomic_write(dst, data):
-            backed_up += 1
+            updated += 1
 
-    print(f"[OK] Backup hoan tat: {backed_up} file hop le trong '{backup_dir.name}/', bo qua {skipped} file rac.")
+    total = updated + kept
+    if total == 0:
+        warn("no valid auth files found")
+    elif updated:
+        info(f"Backed up {updated} auth file(s) to auths_backup/")
+    else:
+        info(f"Auth backup up to date ({total} file(s))")
+    if skipped:
+        warn(f"skipped {skipped} corrupt file(s)")
     return 0
 
 
 def cmd_restore(auths_dir: Path = AUTHS_DIR, backup_dir: Path = BACKUP_DIR) -> int:
-    """Repair every corrupt (NUL-byte/0-byte/bad JSON) or missing token file."""
-    if not auths_dir.is_dir():
-        print(f"[SKIP] Thu muc {auths_dir} khong ton tai.")
-        return 0
-    if not backup_dir.is_dir():
-        print("[WARN] Khong co thu muc backup nao de phuc hoi.")
+    """Repair every corrupt or missing token file from its backup."""
+    if not auths_dir.is_dir() or not backup_dir.is_dir():
         return 0
 
-    repaired = healthy = missing_backup = 0
+    repaired = healthy = lost = 0
     for live in sorted(auths_dir.glob("*.json")):
         if is_valid_json_file(live):
             healthy += 1
             continue
         snap = backup_dir / live.name
-        if is_valid_json_file(snap):
-            if atomic_write(live, snap.read_bytes()):
-                print(f"[FIX] Da phuc hoi file hong tu backup: {live.name}")
-                repaired += 1
+        if is_valid_json_file(snap) and atomic_write(live, snap.read_bytes()):
+            repaired += 1
         else:
-            print(f"[WARN] File hong nhung khong co ban backup hop le: {live.name}")
-            missing_backup += 1
+            warn(f"no valid backup for {live.name}")
+            lost += 1
 
-    # Files lost entirely from auths/ but present & valid in backup/
-    restored_missing = 0
+    recovered = 0
     for snap in sorted(backup_dir.glob("*.json")):
-        if not is_valid_json_file(snap):
-            continue
         live = auths_dir / snap.name
-        if live.exists():
+        if not is_valid_json_file(snap) or live.exists():
             continue
         if atomic_write(live, snap.read_bytes()):
-            print(f"[FIX] Da khoi phuc file bi mat tu backup: {snap.name}")
-            restored_missing += 1
+            recovered += 1
 
-    print(
-        f"[OK] Restore hoan tat: {healthy} file khoe, {repaired} file da sua, "
-        f"{restored_missing} file da khoi phuc lai, {missing_backup} file khong the cuu."
-    )
+    fixed = repaired + recovered
+    if fixed:
+        info(f"Restored {fixed} auth file(s) from backup")
+    elif lost == 0:
+        info("All auth files are healthy")
     return 0
 
 
 def cmd_verify(auths_dir: Path = AUTHS_DIR) -> int:
-    """Health report: count valid vs corrupt token files."""
-    if not auths_dir.is_dir():
-        print("[INFO] Chua co thu muc auths/.")
-        return 0
-    files = sorted(auths_dir.glob("*.json"))
-    valid, corrupt = [], []
-    for f in files:
-        (valid if is_valid_json_file(f) else corrupt).append(f)
-
-    print("=" * 60)
-    print(f"  BAO CAO SUC KHOE TOKEN ({auths_dir.name}/)")
-    print("=" * 60)
-    print(f"Tong so file .json : {len(files)}")
-    print(f"Hop le (JSON OK)   : {len(valid)}")
-    for f in valid:
-        print(f"  [OK]   {f.name}")
-    print(f"Hong (rac/0-byte/NUL): {len(corrupt)}")
-    for f in corrupt:
-        print(f"  [BAD]  {f.name}")
-    print("=" * 60)
-    return 0 if not corrupt else 1
+    """Report token health; exit 1 when any file is corrupt."""
+    files = sorted(auths_dir.glob("*.json")) if auths_dir.is_dir() else []
+    bad = [f for f in files if not is_valid_json_file(f)]
+    info(f"auths/: {len(files) - len(bad)} ok, {len(bad)} corrupted")
+    for f in bad:
+        info(f"  corrupted: {f.name}")
+    return 1 if bad else 0
 
 
 def main(argv=None) -> int:
-    argv = argv or sys.argv[1:]
-    if len(argv) != 1 or argv[0] not in ("backup", "restore", "verify"):
-        print(__doc__)
+    argv = argv if argv is not None else sys.argv[1:]
+    commands = {"backup": cmd_backup, "restore": cmd_restore, "verify": cmd_verify}
+    if len(argv) != 1 or argv[0] not in commands:
+        print(__doc__.strip(), file=sys.stderr)
         return 2
-    action = argv[0]
-    if action == "backup":
-        return cmd_backup()
-    if action == "restore":
-        return cmd_restore()
-    return cmd_verify()
+    try:
+        return commands[argv[0]]()
+    except OSError as e:
+        warn(str(e))
+        return 1
 
 
 if __name__ == "__main__":

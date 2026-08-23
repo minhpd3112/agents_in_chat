@@ -1,0 +1,13 @@
+# Normalize all text files to LF in the repository.
+# Checkouts follow core.autocrlf (LF on Unix, CRLF on Windows).
+* text=auto
+
+# Shell scripts must always be LF, even on Windows checkouts.
+*.sh text eol=lf
+
+# Never touch binaries.
+*.exe -text
+*.dll -text
+*.png -text
+*.ico -text
+*.sqlite -text

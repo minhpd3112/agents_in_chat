@@ -131,6 +131,15 @@ try {
         New-Item -ItemType Directory -Path $AuthsDir | Out-Null
     }
 
+    # [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
+    Write-Host "`n=== [1.5/6] Khoi tao Atomic Auto-Backup cho thu muc auths/ ===" -ForegroundColor Cyan
+    $BackupScript = Join-Path $ScriptDir "scripts\backup_auths.py"
+    if (-not (Test-Path $BackupScript)) {
+        throw "Thieu helper bat buoc tai $BackupScript"
+    }
+    New-Item -ItemType Directory -Path (Join-Path $ScriptDir "auths_backup") -Force | Out-Null
+    & $PythonExe -B $BackupScript backup
+
     # 2. Backup & Configure TOML
     Write-Host "`n=== [2/6] Backup & Cau hinh ~/.codex/config.toml ===" -ForegroundColor Cyan
     & $PythonExe $ConfigScript custom

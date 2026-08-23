@@ -54,8 +54,21 @@ def ensure_default_compat_auth():
         }
         zen_auth.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
 
+def run_auth_backup_hook(action: str) -> int:
+    hook_script = ROOT_DIR / "scripts" / "backup_auths.py"
+    if not hook_script.exists():
+        return 0
+    try:
+        res = subprocess.run([sys.executable, "-B", str(hook_script), action], cwd=str(ROOT_DIR))
+        return res.returncode
+    except Exception as e:
+        print(f"[WARNING] Auth backup hook '{action}' gap loi: {e}")
+        return 0
+
 def cmd_start() -> int:
     ensure_default_compat_auth()
+    # [SAFETY] Auto-Recovery: phuc hoi token hong tu auths_backup/ truoc khi khoi dong proxy.
+    run_auth_backup_hook("restore")
     online, _ = check_proxy_health()
     if online:
         print("[AIC] Proxy API Service da dang hoat dong san sang.")
@@ -89,11 +102,12 @@ def cmd_stop() -> int:
     if sys.platform == "win32":
         ps_script = ROOT_DIR / "stop.ps1"
         res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
-        return res.returncode
     else:
         sh_script = ROOT_DIR / "stop.sh"
         res = subprocess.run(["bash", str(sh_script)])
-        return res.returncode
+    # [SAFETY] Auto-Backup: snapshot token moi nhat sau khi proxy da dung han.
+    run_auth_backup_hook("backup")
+    return 0 if res.returncode == 0 else res.returncode
 
 def cmd_restart() -> int:
     stop_code = cmd_stop()
@@ -166,6 +180,54 @@ def cmd_uninstall() -> int:
         sh_script = ROOT_DIR / "uninstall.sh"
         return subprocess.run(["bash", str(sh_script)]).returncode
 
+def run_login_filtered(args) -> int:
+    import re
+    state = {"in_ssh_banner": False}
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=str(ROOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1
+        )
+        for line in iter(proc.stdout.readline, ''):
+            line_clean = line.strip()
+            # 1. Version banner & logger timestamps
+            if line_clean.startswith("CLIProxyAPI Version:"):
+                continue
+            if re.match(r'^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\]\s+\[.*?\]', line_clean):
+                continue
+            # 2. SSH Tunnel detection banner
+            if "To authenticate from a remote machine, an SSH tunnel may be required." in line_clean:
+                state["in_ssh_banner"] = True
+                continue
+            if state.get("in_ssh_banner"):
+                if "Visit the following URL" in line_clean or line_clean.startswith("https://") or "http://" in line_clean or "Enter code:" in line_clean or "Enter verification code" in line_clean:
+                    state["in_ssh_banner"] = False
+                else:
+                    continue
+            # 3. Specific noisy phrases & SSH separator boxes
+            if "Run one of the following commands on your local machine" in line_clean:
+                continue
+            if line_clean.startswith("ssh -L ") or line_clean.startswith("ssh -i "):
+                continue
+            if "NOTE: If your server's SSH port is not 22" in line_clean:
+                continue
+            if line_clean.startswith("===") and len(line_clean) > 40:
+                continue
+
+            print(line, end="", flush=True)
+
+        proc.stdout.close()
+        return proc.wait()
+    except KeyboardInterrupt:
+        print("\n[AIC] Da huy thao tac dang nhap.")
+        return 130
+
 def cmd_login_agy() -> int:
     proxy_exe = ROOT_DIR / "cli-proxy-api.exe" if sys.platform == "win32" else ROOT_DIR / "cli-proxy-api"
     if not proxy_exe.exists():
@@ -179,7 +241,7 @@ def cmd_login_agy() -> int:
     print("-> Vui long click hoac copy duong link duoi day dan vao trinh duyet:")
     print("-" * 68)
     args = [str(proxy_exe), "-antigravity-login", "-no-browser"]
-    return subprocess.run(args, cwd=str(ROOT_DIR)).returncode
+    return run_login_filtered(args)
 
 def cmd_login_codex(mode=None) -> int:
     proxy_exe = ROOT_DIR / "cli-proxy-api.exe" if sys.platform == "win32" else ROOT_DIR / "cli-proxy-api"
@@ -216,7 +278,7 @@ def cmd_login_codex(mode=None) -> int:
         print("-" * 68)
         args = [str(proxy_exe), "-codex-login", "-no-browser"]
 
-    return subprocess.run(args, cwd=str(ROOT_DIR)).returncode
+    return run_login_filtered(args)
 
 
 HELP_TEXT = f"""

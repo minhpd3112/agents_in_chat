@@ -8,6 +8,9 @@ if pgrep -f "cli-proxy-api" > /dev/null; then
     exit 0
 else
     cd "$SCRIPT_DIR"
+    # [SAFETY] Auto-Recovery: phuc hoi token hong tu auths_backup/ truoc khi khoi dong proxy.
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+    "$PYTHON_BIN" -B "$SCRIPT_DIR/scripts/backup_auths.py" restore || true
     nohup "$PROXY_BIN" -config "$SCRIPT_DIR/config.yaml" > /dev/null 2>&1 &
     sleep 2
     if pgrep -f "cli-proxy-api" > /dev/null; then

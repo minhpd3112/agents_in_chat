@@ -17,3 +17,10 @@ if ($Stopped) {
 } else {
     Write-Host "-> CLIProxyAPI hien khong chay." -ForegroundColor Yellow
 }
+
+# [SAFETY] Auto-Backup: snapshot trang thai token moi nhat sau khi proxy da dung han.
+$BackupScript = Join-Path $PSScriptRoot "scripts\backup_auths.py"
+if (Test-Path $BackupScript) {
+    $PythonBin = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
+    & $PythonBin -B $BackupScript backup
+}

@@ -3,6 +3,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ScriptDir) { $ScriptDir = Get-Location }
 $ProxyExe = Join-Path $ScriptDir "cli-proxy-api.exe"
 
+# [SAFETY] Auto-Recovery: phuc hoi moi file token hong (NUL-byte/0-byte/JSON loi)
+# tu auths_backup/ TRUOC khi proxy duoc khoi chay.
+$BackupScript = Join-Path $ScriptDir "scripts\backup_auths.py"
+$PythonBin = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
+& $PythonBin -B $BackupScript restore
+
 $conn = Test-NetConnection -ComputerName "127.0.0.1" -Port 8080 -WarningAction SilentlyContinue
 if ($conn.TcpTestSucceeded) {
     Write-Host "-> [ONLINE] CLIProxyAPI dang hoat dong san sang." -ForegroundColor Yellow

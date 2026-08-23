@@ -7,6 +7,7 @@ from test_models_cache import test_models_cache
 from test_codex_config import test_codex_config
 from test_sqlite_and_sessions import test_sqlite_and_sessions
 from test_sync_and_backup_unit import test_sync_and_backup_unit
+from test_auth_backup import test_auth_backup
 from test_gemini_tool_calling import test_gemini_tool_calling
 from test_claude_tool_calling import test_claude_tool_calling
 
@@ -22,8 +23,9 @@ def run_all():
         ("4. Codex config.toml Integrity", test_codex_config),
         ("5. SQLite DB & Session Headers Provider Sync", test_sqlite_and_sessions),
         ("6. Session Sync & Atomic Backup/Restore Unit Tests (13 Fixtures)", test_sync_and_backup_unit),
-        ("7. Gemini 3.7 Flash Native Tool Calling (No Silence)", test_gemini_tool_calling),
-        ("8. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
+        ("7. Auth Token Atomic Auto-Backup & Recovery (NUL-byte Fault Injection)", test_auth_backup),
+        ("8. Gemini 3.7 Flash Native Tool Calling (No Silence)", test_gemini_tool_calling),
+        ("9. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
     ]
 
     passed = 0

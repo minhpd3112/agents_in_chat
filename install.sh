@@ -90,6 +90,16 @@ fi
 AUTHS_DIR="$SCRIPT_DIR/auths"
 mkdir -p "$AUTHS_DIR"
 
+# [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
+BACKUP_SCRIPT="$SCRIPT_DIR/scripts/backup_auths.py"
+if [ ! -f "$BACKUP_SCRIPT" ]; then
+    echo "[ERROR] Thieu helper bat buoc tai $BACKUP_SCRIPT"
+    exit 1
+fi
+echo "=== [1.5/6] Khoi tao Atomic Auto-Backup cho thu muc auths/ ==="
+mkdir -p "$SCRIPT_DIR/auths_backup"
+"$PYTHON_BIN" -B "$BACKUP_SCRIPT" backup
+
 echo "=== [2/6] Backup & Cau hinh ~/.codex/config.toml ==="
 "$PYTHON_BIN" "$CONFIG_SCRIPT" custom || rollback
 

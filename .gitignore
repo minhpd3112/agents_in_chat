@@ -8,6 +8,7 @@
 # Authentication & Credentials
 auths/*
 !auths/.gitkeep
+auths_backup/
 auths_disabled/
 credentials/
 *.token

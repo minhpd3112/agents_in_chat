@@ -11,8 +11,6 @@ import urllib.request
 import subprocess
 from pathlib import Path
 
-VERSION = "1.1.0"
-
 def get_root_dir() -> Path:
     script_dir = Path(__file__).resolve().parent
     if (script_dir.parent / "config.yaml").exists() or (script_dir.parent / "config.example.yaml").exists() or (script_dir.parent / "install.ps1").exists():
@@ -21,12 +19,14 @@ def get_root_dir() -> Path:
         return script_dir
     return script_dir.parent
 
-
 ROOT_DIR = get_root_dir()
 CODEX_DIR = Path(os.path.expanduser("~/.codex"))
 
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 from log_utils import error, info, warn  # noqa: E402
+from check_updates import get_local_version, check_for_update, prompt_update_if_available, run_update  # noqa: E402
+
+VERSION = get_local_version()
 
 def check_proxy_health():
     try:
@@ -69,6 +69,7 @@ def run_auth_backup_hook(action: str) -> int:
         return 0
 
 def cmd_start() -> int:
+    prompt_update_if_available()
     ensure_default_compat_auth()
     # [SAFETY] Auto-Recovery: phuc hoi token hong tu auths_backup/ truoc khi khoi dong proxy.
     run_auth_backup_hook("restore")
@@ -167,8 +168,19 @@ def cmd_status() -> int:
 
     # 4. Auth Accounts
     print(f"[AUTH] OAuth Quota Accounts       : {auth_count} tai khoan san sang")
+
+    # 5. Version / Update Status
+    has_up, lver, rver = check_for_update(force=False)
+    if has_up:
+        print(f"[VER]  AIC System Version        : v{lver} (Update available -> v{rver} | Run 'aic update')")
+    else:
+        print(f"[VER]  AIC System Version        : v{lver} (Latest)")
     print("=" * 65)
     return 0 if online else 1
+
+def cmd_update() -> int:
+    ok = run_update()
+    return 0 if ok else 1
 
 def cmd_test() -> int:
     test_runner = ROOT_DIR / "tests" / "run_tests.py"
@@ -330,6 +342,7 @@ Cac lenh kha dung:
   aic stop        - Tat Proxy API va giai phong RAM tai nguyen
   aic restart     - Khoi dong lai Proxy API Service
   aic status      - Kiem tra tinh trang he thong (Proxy, Provider, Cache)
+  aic update      - Cap nhat AIC len ban moi nhat va tu dong dong bo
 {test_line}
   aic login_agy   - Dang nhap Google Antigravity (Gemini Flash & Claude Sonnet/Opus)
   aic login_codex - Dang nhap OpenAI Codex (Tuy chon: Browser hoac Device Code)
@@ -357,6 +370,8 @@ def main() -> int:
         return cmd_restart()
     elif cmd in ["status", "st"]:
         return cmd_status()
+    elif cmd in ["update", "upgrade"]:
+        return cmd_update()
     elif cmd in ["test", "t"]:
         return cmd_test()
     elif cmd in ["login_agy", "login-agy", "login_anti", "login-anti"]:

@@ -94,7 +94,10 @@ function Invoke-Rollback {
 }
 
 try {
-    Write-Host "`n=== [1/6] Kiem tra moi truong agents_in_chat ===" -ForegroundColor Cyan
+    $VersionFile = Join-Path $ScriptDir "VERSION"
+    $AicVersion = if (Test-Path $VersionFile) { (Get-Content $VersionFile -Raw).Trim() } else { "" }
+    $VerLabel = if ($AicVersion) { " v$AicVersion" } else { "" }
+    Write-Host "`n=== Kiem tra moi truong agents_in_chat$VerLabel ===" -ForegroundColor Cyan
 
     # Proxy binary
     $ProxyExe = Join-Path $ScriptDir "cli-proxy-api.exe"
@@ -132,7 +135,7 @@ try {
     }
 
     # [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
-    Write-Host "`n=== [1.5/6] Khoi tao Atomic Auto-Backup cho thu muc auths/ ===" -ForegroundColor Cyan
+    Write-Host "`n=== Khoi tao Atomic Auto-Backup cho thu muc auths/ ===" -ForegroundColor Cyan
     $BackupScript = Join-Path $ScriptDir "scripts\backup_auths.py"
     if (-not (Test-Path $BackupScript)) {
         throw "Thieu helper bat buoc tai $BackupScript"
@@ -141,7 +144,7 @@ try {
     & $PythonExe -B $BackupScript backup
 
     # 2. Backup & Configure TOML
-    Write-Host "`n=== [2/6] Backup & Cau hinh ~/.codex/config.toml ===" -ForegroundColor Cyan
+    Write-Host "`n=== Backup & Cau hinh ~/.codex/config.toml ===" -ForegroundColor Cyan
     & $PythonExe $ConfigScript custom
     if ($LASTEXITCODE -ne 0) {
         throw "Cau hinh config.toml that bai."
@@ -149,7 +152,7 @@ try {
     $State_ConfigModified = $true
 
     # 3. Models cache template & Default Compat Auths
-    Write-Host "`n=== [3/6] Cau hinh & Khoa READ-ONLY ~/.codex/models_cache.json ===" -ForegroundColor Cyan
+    Write-Host "`n=== Cau hinh & Khoa READ-ONLY ~/.codex/models_cache.json ===" -ForegroundColor Cyan
     $TemplateJson = Join-Path $ScriptDir "docs\models_cache_template.json"
     if (-not (Test-Path $TemplateJson)) {
         throw "Khong tim thay template tai $TemplateJson!"
@@ -158,16 +161,15 @@ try {
         Set-ItemProperty -Path $ModelsCachePath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
     }
 
-    # Tu dong nhan dien phien ban Codex CLI hien tai de dong bo client_version, tranh loi cache version mismatch
-    $CodexVer = "0.149.0"
+    # Tu dong nhan dien phien ban Codex CLI hien tai de dong bo client_version, mac dinh lay tu template
+    $TemplateData = Get-Content $TemplateJson -Raw -Encoding UTF8 | ConvertFrom-Json
+    $CodexVer = if ($TemplateData.client_version) { $TemplateData.client_version } else { "0.153.0" }
     try {
         $VerOut = & codex --version 2>$null
         if ($VerOut -match '(\d+\.\d+\.\d+)') {
             $CodexVer = $Matches[1]
         }
     } catch {}
-
-    $TemplateData = Get-Content $TemplateJson -Raw -Encoding UTF8 | ConvertFrom-Json
     $TemplateData.client_version = $CodexVer
     $JsonContent = $TemplateData | ConvertTo-Json -Depth 30
     [IO.File]::WriteAllText($ModelsCachePath, $JsonContent, (New-Object System.Text.UTF8Encoding($false)))
@@ -198,14 +200,7 @@ try {
         Set-Content -Path $ZenAuthPath -Value $ZenAuthJson -Encoding utf8
     }
 
-    $ModelCount = 0
-    try {
-        $TemplateData = Get-Content $TemplateJson -Raw -Encoding UTF8 | ConvertFrom-Json
-        $ModelCount = $TemplateData.models.Count
-    } catch {
-        $ModelCount = 0
-    }
-
+    $ModelCount = if ($TemplateData.models) { $TemplateData.models.Count } else { 0 }
     if ($ModelCount -gt 0) {
         Write-Host "-> Da nap $ModelCount dinh nghia model & KHOA READ-ONLY cache menu cho Codex CLI." -ForegroundColor Green
     } else {
@@ -213,7 +208,7 @@ try {
     }
 
     # 4. Sync sessions & Verify
-    Write-Host "`n=== [4/6] Dong bo & Xac minh lich su chat sang 'custom' ===" -ForegroundColor Cyan
+    Write-Host "`n=== Dong bo & Xac minh lich su chat sang 'custom' ===" -ForegroundColor Cyan
     & $PythonExe $SyncScript custom
     if ($LASTEXITCODE -ne 0) {
         throw "Dong bo lich su session sang 'custom' that bai."
@@ -226,7 +221,7 @@ try {
     }
 
     # 5. Register PATH & Profile
-    Write-Host "`n=== [5/6] Dang ky lenh toan cuc 'aic' ===" -ForegroundColor Cyan
+    Write-Host "`n=== Dang ky lenh toan cuc 'aic' ===" -ForegroundColor Cyan
     if ($UserPathFile) {
         $curr = if (Test-Path $UserPathFile) { Get-Content $UserPathFile -Raw } else { "" }
         $cleanP = if ($curr) { ($curr.Split(';') | Where-Object { $_ -ne "" }) } else { @() }
@@ -302,7 +297,7 @@ function global:codex {
     }
 
     # 6. Start proxy service
-    Write-Host "`n=== [6/6] Khoi dong CLIProxyAPI Service ===" -ForegroundColor Cyan
+    Write-Host "`n=== Khoi dong CLIProxyAPI Service ===" -ForegroundColor Cyan
     if ($FailStep -eq "start") {
         throw "Simulation of start failure at step 6"
     }
@@ -316,20 +311,7 @@ function global:codex {
         Write-Host "-> [TEST_MODE] Bo qua khoi dong proxy." -ForegroundColor Yellow
     }
 
-    Write-Host "`n============================================================" -ForegroundColor Green
-    Write-Host "   CAI DAT & DANG KY LENH TOAN CUC 'aic' THANH CONG 100%!" -ForegroundColor Green
-    Write-Host "============================================================" -ForegroundColor Green
-    Write-Host "Cac buoc tiep theo:"
-    Write-Host "  1. Nap tai khoan vao pool (Neu chua co):"
-    Write-Host "     - Google Antigravity: aic login_agy"
-    Write-Host "     - OpenAI Codex:       aic login_codex"
-    Write-Host "     - Ox Alpha:           San sang su dung ngay (Mien phi, khong can login)"
-    Write-Host "`n  2. Bat dau su dung:"
-    Write-Host "     - Khoi chay Codex:    codex"
-    Write-Host "     - Kiem tra he thong:  aic status"
-    Write-Host "     - Chay kiem thu:      aic test"
-    Write-Host "     - Tat / Bat proxy:    aic stop  /  aic start"
-    Write-Host "     - Khoi phuc goc:      aic uninstall`n"
+    Write-Host "`n🎉 AIC installed successfully! Run 'aic' or 'codex' to get started.`n" -ForegroundColor Green
 }
 catch {
     Invoke-Rollback $_.Exception.Message

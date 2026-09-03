@@ -10,6 +10,7 @@ from test_sync_and_backup_unit import test_sync_and_backup_unit
 from test_auth_backup import test_auth_backup
 from test_gemini_tool_calling import test_gemini_tool_calling
 from test_claude_tool_calling import test_claude_tool_calling
+from test_check_updates import test_check_updates
 
 SUITES = [
     ("1. Proxy Health & Endpoint (http://127.0.0.1:8080)", test_proxy_health),
@@ -21,6 +22,7 @@ SUITES = [
     ("7. Auth Token Atomic Auto-Backup & Recovery (NUL-byte Fault Injection)", test_auth_backup),
     ("8. Gemini 3.7 Flash Native Tool Calling (No Silence)", test_gemini_tool_calling),
     ("9. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
+    ("10. AIC Self-Update & SemVer Verification", test_check_updates),
 ]
 
 def run_all():

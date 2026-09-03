@@ -1,4 +1,4 @@
-# Agents in Chat (AIC) — v1.1.0
+# Agents in Chat (AIC)
 
 Công cụ tích hợp và quản trị Quota Pool đa tài khoản cho OpenAI Codex CLI, phục vụ 2 chức năng chính:
 

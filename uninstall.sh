@@ -43,7 +43,7 @@ fi
 echo "=== Khoi phuc cai dat goc OpenAI Codex CLI ==="
 
 # 1. Tat proxy
-echo "-> [1/6] Dang tat tien trinh Proxy API..."
+echo "-> Dang tat tien trinh Proxy API..."
 if [ "$AIC_SKIP_PROXY" -ne 1 ]; then
     "$SCRIPT_DIR/stop.sh" >/dev/null 2>&1 || true
 else
@@ -51,7 +51,7 @@ else
 fi
 
 # 2. Dong bo toan bo lich su chat ve provider 'openai'
-echo "-> [2/6] Dong bo toan bo lich su chat ve provider 'openai'..."
+echo "-> Dong bo toan bo lich su chat ve provider 'openai'..."
 if ! "$PYTHON_BIN" "$SYNC_SCRIPT" openai; then
     echo -e "\n[ERROR] Dong bo lich su chat sang 'openai' that bai! Rollback session ve 'custom' va huy bo uninstall."
     "$PYTHON_BIN" "$SYNC_SCRIPT" custom >/dev/null 2>&1 || true
@@ -60,7 +60,7 @@ if ! "$PYTHON_BIN" "$SYNC_SCRIPT" openai; then
 fi
 
 # 3. Xac minh toan bo lich su chat da chuyen sang 'openai'
-echo "-> [3/6] Xac minh toan bo lich su chat sang 'openai'..."
+echo "-> Xac minh toan bo lich su chat sang 'openai'..."
 if ! "$PYTHON_BIN" "$SYNC_SCRIPT" --verify openai; then
     echo -e "\n[ERROR] Xac minh lich su chat that bai! Rollback session ve 'custom' va huy bo uninstall."
     "$PYTHON_BIN" "$SYNC_SCRIPT" custom >/dev/null 2>&1 || true
@@ -69,7 +69,7 @@ if ! "$PYTHON_BIN" "$SYNC_SCRIPT" --verify openai; then
 fi
 
 # 4. Khoi phuc config.toml ban dau
-echo "-> [4/6] Khoi phuc config.toml ban dau..."
+echo "-> Khoi phuc config.toml ban dau..."
 if ! "$PYTHON_BIN" "$CONFIG_SCRIPT" restore; then
     echo -e "\n[ERROR] Khoi phuc config.toml that bai! Rollback session ve 'custom' va huy bo uninstall."
     "$PYTHON_BIN" "$SYNC_SCRIPT" custom >/dev/null 2>&1 || true
@@ -78,7 +78,7 @@ if ! "$PYTHON_BIN" "$CONFIG_SCRIPT" restore; then
 fi
 
 # 5. Xoa models_cache.json tuy chinh
-echo "-> [5/6] Xu ly models_cache.json tuy chinh..."
+echo "-> Xu ly models_cache.json tuy chinh..."
 if [ "$AIC_FAIL_STEP" = "remove-cache" ]; then
     echo "[FAIL_INJECTION] Injected failure at remove-cache"
     exit 1
@@ -94,7 +94,7 @@ if [ -f "$MODELS_CACHE" ]; then
 fi
 
 # 6. Go bo symlink aic (Chi xoa neu la symlink trỏ toi aic)
-echo "-> [6/6] Go bo lenh toan cuc 'aic'..."
+echo "-> Go bo lenh toan cuc 'aic'..."
 if [ -L "$BIN_LINK_DIR/aic" ]; then
     rm -f "$BIN_LINK_DIR/aic"
     echo "-> Da go bo symlink toan cuc 'aic'."

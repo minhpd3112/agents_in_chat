@@ -45,7 +45,7 @@ if (-not (Test-Path $SyncScript)) {
 Write-Host "`n=== Khoi phuc cai dat goc OpenAI Codex CLI ===" -ForegroundColor Cyan
 
 # 1. Tat tien trinh proxy
-Write-Host "-> [1/6] Dang tat tien trinh Proxy API..." -ForegroundColor Cyan
+Write-Host "-> Dang tat tien trinh Proxy API..." -ForegroundColor Cyan
 if (-not $SkipProxy) {
     & (Join-Path $ScriptDir "stop.ps1")
 } else {
@@ -53,7 +53,7 @@ if (-not $SkipProxy) {
 }
 
 # 2. Dong bo toan bo lich su chat ve provider 'openai'
-Write-Host "-> [2/6] Dong bo toan bo lich su chat ve provider 'openai'..." -ForegroundColor Cyan
+Write-Host "-> Dong bo toan bo lich su chat ve provider 'openai'..." -ForegroundColor Cyan
 & $PythonExe $SyncScript openai
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n[ERROR] Dong bo lich su chat sang 'openai' that bai! Rollback session ve 'custom' va huy bo uninstall." -ForegroundColor Red
@@ -63,7 +63,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. Xac minh toan bo lich su chat da chuyen sang 'openai'
-Write-Host "-> [3/6] Xac minh toan bo lich su chat sang 'openai'..." -ForegroundColor Cyan
+Write-Host "-> Xac minh toan bo lich su chat sang 'openai'..." -ForegroundColor Cyan
 & $PythonExe $SyncScript --verify openai
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n[ERROR] Xac minh lich su chat that bai! Rollback session ve 'custom' va huy bo uninstall." -ForegroundColor Red
@@ -73,7 +73,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 4. Khoi phuc config.toml ve ban goc ban dau
-Write-Host "-> [4/6] Khoi phuc config.toml ban dau..." -ForegroundColor Cyan
+Write-Host "-> Khoi phuc config.toml ban dau..." -ForegroundColor Cyan
 & $PythonExe $ConfigScript restore
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n[ERROR] Khoi phuc config.toml that bai! Rollback session ve 'custom' va huy bo uninstall." -ForegroundColor Red
@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 5. Mo khoa va xoa models_cache.json tuy chinh de Codex CLI tu tao lai cache cua OpenAI
-Write-Host "-> [5/6] Xu ly models_cache.json tuy chinh..." -ForegroundColor Cyan
+Write-Host "-> Xu ly models_cache.json tuy chinh..." -ForegroundColor Cyan
 if ($FailStep -eq "remove-cache") {
     Write-Host "`n[FAIL_INJECTION] Injected failure at remove-cache" -ForegroundColor Red
     exit 1
@@ -99,7 +99,7 @@ if (Test-Path $ModelsCachePath) {
 }
 
 # 6. Go bo lenh 'aic' khoi User PATH & PowerShell Profile
-Write-Host "-> [6/6] Go bo lenh 'aic' khoi PATH & PowerShell Profile..." -ForegroundColor Cyan
+Write-Host "-> Go bo lenh 'aic' khoi PATH & PowerShell Profile..." -ForegroundColor Cyan
 if ($UserPathFile) {
     if (Test-Path $UserPathFile) {
         $curr = Get-Content $UserPathFile -Raw

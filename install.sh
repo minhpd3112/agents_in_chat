@@ -59,7 +59,12 @@ rollback() {
     exit 1
 }
 
-echo "=== [1/6] Kiem tra moi truong agents_in_chat ==="
+AIC_VERSION="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || true)"
+if [ -n "$AIC_VERSION" ]; then
+    echo "=== Kiem tra moi truong agents_in_chat v$AIC_VERSION ==="
+else
+    echo "=== Kiem tra moi truong agents_in_chat ==="
+fi
 
 PROXY_BIN="$SCRIPT_DIR/cli-proxy-api"
 if [ ! -f "$PROXY_BIN" ] && [ -f "$SCRIPT_DIR/cli-proxy-api.exe" ]; then
@@ -96,14 +101,14 @@ if [ ! -f "$BACKUP_SCRIPT" ]; then
     echo "[ERROR] Thieu helper bat buoc tai $BACKUP_SCRIPT"
     exit 1
 fi
-echo "=== [1.5/6] Khoi tao Atomic Auto-Backup cho thu muc auths/ ==="
+echo "=== Khoi tao Atomic Auto-Backup cho thu muc auths/ ==="
 mkdir -p "$SCRIPT_DIR/auths_backup"
 "$PYTHON_BIN" -B "$BACKUP_SCRIPT" backup
 
-echo "=== [2/6] Backup & Cau hinh ~/.codex/config.toml ==="
+echo "=== Backup & Cau hinh ~/.codex/config.toml ==="
 "$PYTHON_BIN" "$CONFIG_SCRIPT" custom || rollback
 
-echo "=== [3/6] Cau hinh & Khoa READ-ONLY ~/.codex/models_cache.json ==="
+echo "=== Cau hinh & Khoa READ-ONLY ~/.codex/models_cache.json ==="
 TEMPLATE_JSON="$SCRIPT_DIR/docs/models_cache_template.json"
 if [ ! -f "$TEMPLATE_JSON" ]; then
     echo "[ERROR] Khong tim thay template tai $TEMPLATE_JSON!"
@@ -116,14 +121,14 @@ chmod 644 "$MODELS_CACHE" 2>/dev/null || true
 import json, subprocess, re
 template_path = '$TEMPLATE_JSON'
 cache_path = '$MODELS_CACHE'
-ver = '0.149.0'
+with open(template_path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+ver = data.get('client_version', '0.153.0')
 try:
     p = subprocess.run(['codex', '--version'], capture_output=True, text=True)
     m = re.search(r'(\d+\.\d+\.\d+)', p.stdout)
     if m: ver = m.group(1)
 except Exception: pass
-with open(template_path, 'r', encoding='utf-8') as f:
-    data = json.load(f)
 data['client_version'] = ver
 with open(cache_path, 'w', encoding='utf-8', newline='\n') as f:
     json.dump(data, f, indent=2)
@@ -158,11 +163,11 @@ else
     echo "-> Da nap danh muc model & KHOA READ-ONLY cache menu cho Codex CLI."
 fi
 
-echo "=== [4/6] Dong bo & Xac minh lich su chat sang provider 'custom' ==="
+echo "=== Dong bo & Xac minh lich su chat sang provider 'custom' ==="
 "$PYTHON_BIN" "$SYNC_SCRIPT" custom || rollback
 "$PYTHON_BIN" "$SYNC_SCRIPT" --verify custom || rollback
 
-echo "=== [5/6] Dang ky lenh toan cuc 'aic' vao PATH ==="
+echo "=== Dang ky lenh toan cuc 'aic' vao PATH ==="
 mkdir -p "$BIN_LINK_DIR"
 chmod +x "$SCRIPT_DIR/bin/aic"
 if [ -e "$BIN_LINK_DIR/aic" ] && [ ! -L "$BIN_LINK_DIR/aic" ]; then
@@ -193,7 +198,7 @@ if [ -n "$PROFILE_FILE" ]; then
     fi
 fi
 
-echo "=== [6/6] Khoi dong CLIProxyAPI ==="
+echo "=== Khoi dong CLIProxyAPI ==="
 if [ "$AIC_FAIL_STEP" = "start" ]; then
     echo "[FAIL_INJECTION] Injected failure at start"
     rollback
@@ -206,20 +211,4 @@ else
     echo "-> [TEST_MODE] Bo qua khoi dong proxy."
 fi
 
-echo ""
-echo "============================================================"
-echo "   CAI DAT & DANG KY LENH TOAN CUC 'aic' THANH CONG 100%!"
-echo "============================================================"
-echo "Cac buoc tiep theo:"
-echo "  1. Nap tai khoan vao pool (Neu chua co):"
-echo "     - Google Antigravity: aic login_agy"
-echo "     - OpenAI Codex:       aic login_codex"
-echo "     - Ox Alpha:           San sang su dung ngay (Mien phi, khong can login)"
-echo ""
-echo "  2. Bat dau su dung:"
-echo "     - Khoi chay Codex:    codex"
-echo "     - Kiem tra he thong:  aic status"
-echo "     - Chay kiem thu:      aic test"
-echo "     - Tat / Bat proxy:    aic stop  /  aic start"
-echo "     - Khoi phuc goc:      aic uninstall"
-echo ""
+echo -e "\n🎉 AIC installed successfully! Run 'aic' or 'codex' to get started.\n"

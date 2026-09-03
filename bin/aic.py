@@ -11,7 +11,7 @@ import urllib.request
 import subprocess
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 def get_root_dir() -> Path:
     script_dir = Path(__file__).resolve().parent

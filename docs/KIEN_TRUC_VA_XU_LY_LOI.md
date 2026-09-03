@@ -277,3 +277,48 @@ sandbox = "elevated"
   4. *Báo cáo sức khỏe (`verify`):* Thống kê số file hợp lệ / số file hỏng trong `auths/`, trả exit code 0 (khỏe) hoặc 1 (có file hỏng) để tích hợp vào pipeline kiểm thử.
   5. *Tích hợp vòng đời:* [`start.ps1`](file:///E:/AI/agents_in_chat/start.ps1)/[`start.sh`](file:///E:/AI/agents_in_chat/start.sh)/`aic start` chạy `restore` trước khi nạp binary; [`stop.ps1`](file:///E:/AI/agents_in_chat/stop.ps1)/[`stop.sh`](file:///E:/AI/agents_in_chat/stop.sh)/`aic stop`/`aic restart` chạy `backup` sau khi dừng; [`install.ps1`](file:///E:/AI/agents_in_chat/install.ps1)/[`install.sh`](file:///E:/AI/agents_in_chat/install.sh) khởi tạo `auths_backup/` và chụp snapshot ban đầu.
   6. *An toàn bảo mật:* Thư mục `auths_backup/` chứa token thật nên đã được đưa vào `.gitignore`, không bao giờ được commit/push lên Git repository.
+
+---
+
+### 18. Sự cố Lệch Phiên Bản Cache (`client_version`) khi Codex CLI Cập Nhật & Giải Pháp Smart Wrapper Hook (Zero-Touch)
+* **Hiện tượng:**
+  * Khi OpenAI phát hành bản cập nhật mới cho Codex CLI (ví dụ từ `0.150.1` lên `0.153.0`), người dùng nhấn `1. Update now` để cập nhật binary.
+  * Sau khi cập nhật thành công, mở Codex CLI và gõ lệnh `/model` thì menu 8 mô hình tùy chỉnh bị biến mất hoàn toàn, thay bằng danh sách 5 mô hình tĩnh mặc định của OpenAI (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.2`).
+* **Bản chất kỹ thuật & Cơ chế của Codex CLI:**
+  1. *Hardcoded fallback trong Rust binary:* OpenAI nhúng cứng danh sách 5 model mặc định vào thẳng bên trong file nhị phân `codex.exe`.
+  2. *Kiểm tra phiên bản cache:* Khi khởi động, `codex.exe` đọc file `~/.codex/models_cache.json` và so sánh trường `client_version` với số phiên bản của binary đang chạy. Nếu `cache.client_version != current_exe_version`, Codex CLI coi file cache là "không hợp lệ / lỗi thời", bỏ qua hoàn toàn file trên đĩa và dùng 5 model nhúng tĩnh trong RAM của file `.exe`.
+  3. *Bảo toàn dữ liệu nhờ khóa Read-Only:* Nhờ thuộc tính Read-Only ở tầng hệ điều hành NTFS mà AIC thiết lập, OpenAI không thể ghi đè hay xóa bỏ file cache 8 model tùy chỉnh của người dùng. Dữ liệu vẫn an toàn nguyên vẹn 100% trên đĩa.
+* **Giải pháp: Smart Wrapper Hook trong PowerShell Profile (Zero-Touch Update):**
+  * Đăng ký hàm wrapper `global:codex` bên trong khối `# >>> AIC >>>` của PowerShell Profile (`$PROFILE`).
+  * Khi người dùng gõ `codex`, hàm wrapper thực thi trong **0.05 giây**:
+    1. Kiểm tra nhanh đường dẫn binary thật của `codex.exe`.
+    2. Đọc file `models_cache.json` và trích xuất `client_version` bằng biểu thức chính quy (Regex).
+    3. Chạy `codex.exe --version` để lấy số phiên bản hiện tại.
+    4. Nếu phát hiện lệch phiên bản: tự động mở khóa Read-Only, thay thế đúng chuỗi `client_version`, ghi đè nguyên tử bằng UTF-8 No BOM và khóa lại Read-Only.
+    5. Chuyển tiếp toàn bộ cờ và đối số `@args` sang `codex.exe` thật.
+  * **Trải nghiệm Zero-Touch:** Khi Codex CLI update, chọn **Update now**, sau đó **tắt terminal hiện tại và mở terminal mới để sử dụng**. Hook tích hợp trong PowerShell Profile sẽ tự động nhận diện phiên bản mới và đồng bộ cache trong tích tắc (~0.05s) mà không cần phải chạy lại kịch bản cài đặt (`install.ps1`).
+
+---
+
+### 19. Tích Hợp Mô Hình Google Gemini 3.8 Flash (High)
+* **Bối cảnh:** Google Antigravity bổ sung mô hình thế hệ mới `gemini-3.8-flash`.
+* **Cấu hình đồng bộ trong hệ sinh thái AIC:**
+  1. *Proxy Alias Mapping ([`config.yaml`](file:///E:/AI/agents_in_chat/config.yaml)):* Khai báo ánh xạ cho Google Antigravity:
+     * `gemini-3.8-flash-high` ➔ `gemini-3.8-flash`
+     * `gemini-3.8-flash` ➔ `gemini-3.8-flash`
+  2. *Đặc tả Codex Models Cache ([`docs/models_cache_template.json`](file:///E:/AI/agents_in_chat/docs/models_cache_template.json)):* Khai báo đầy đủ thuộc tính Native Tool Calling: `slug: "gemini-3.8-flash"`, `display_name: "Gemini 3.8 Flash (High)"`, `tool_mode: "direct"`, `default_reasoning_level: "high"`, `visibility: "list"`.
+  3. *OpenCode Desktop ([`~/.config/opencode/opencode.jsonc`](file:///C:/Users/Lenovo/.config/opencode/opencode.jsonc)):* Bổ sung mục `"gemini-3.8-flash": { "name": "Gemini 3.8 Flash High" }`.
+* **Xác thực Live SSE Protocol:** Gửi request thực tế gọi tool `exec_command` qua cổng 8080. Mô hình phản hồi đủ 9 sự kiện SSE và phát native `fc_call` chuẩn xác 100%, không bị nuốt turn hay rơi vào text fallback.
+
+---
+
+### 20. Sự Cố Ảo Giác XML Thẻ Tool Calling (`<function_calls>`) do Bẻ Lái Nhầm GPT-5.6 Sol & Nén Ngữ Cảnh (`Context compacted`)
+* **Hiện tượng:**
+  * Khi chọn mô hình `gpt-5.6-sol` trong Codex CLI, mô hình liên tục in ra các thẻ văn bản thô dạng XML: `<function_calls><invoke name="exec_command">...</invoke></function_calls>`. Mô hình không thực thi lệnh thực tế, in ra hàng loạt dòng giả lập gọi lệnh rồi bị Codex CLI ngắt lượt (`Conversation interrupted`).
+* **Nguyên nhân gốc rễ:**
+  1. *Cấu hình bẻ lái sai trong `config.yaml`:* Trong `config.yaml` có định nghĩa fallback gán alias `claude-sonnet-4-6` trỏ sang `gpt-5.6-sol` và loại trừ `gpt-5.6-sol` khỏi OpenAI Codex provider. Khi người dùng chọn `gpt-5.6-sol`, Proxy đã chuyển tiếp request sang **Claude Sonnet 4.6 của Antigravity** thay vì gọi GPT-5.6 Sol thật của OpenAI.
+  2. *Nén ngữ cảnh (`Context compacted`):* Đoạn hội thoại kéo dài vượt ngưỡng token khiến Codex CLI kích hoạt tính năng nén ngữ cảnh. Sau khi bị nén nhiều lần, Claude Sonnet 4.6 bị mất cấu trúc system prompt của giao thức Tool Calling và rơi vào trạng thái ảo giác (hallucination), tự động nhả ra các thẻ XML thô trong dữ liệu huấn luyện tiền kỳ thay vì gửi cấu trúc đối tượng JSON gọi tool chuẩn.
+  3. *Khác biệt với GPT-5.6 Sol thật:* GPT-5.6 Sol gốc chạy trực tiếp trên tài khoản OpenAI Codex OAuth qua Responses API, giao tiếp bằng nhị phân/JSON stream chuẩn xác của OpenAI và không bao giờ in ra các thẻ XML của Anthropic Claude.
+* **Giải pháp khắc phục:**
+  * Loại bỏ toàn bộ các dòng alias fallback bẻ lái `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` sang Claude Sonnet trong `config.yaml`.
+  * Mở khóa các mô hình GPT-5.6 khỏi danh sách `oauth-excluded-models.codex` để toàn bộ request Sol/Terra/Luna được định tuyến 100% về tài khoản OpenAI Codex OAuth thật.

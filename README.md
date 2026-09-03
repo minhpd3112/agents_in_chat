@@ -1,15 +1,18 @@
-# Agents in Chat (AIC)
+# Agents in Chat (AIC) — v1.1.0
 
 Công cụ tích hợp và quản trị Quota Pool đa tài khoản cho OpenAI Codex CLI, phục vụ 2 chức năng chính:
 
-1. **Đa mô hình trên cùng một phiên chat:** Làm việc và chuyển đổi linh hoạt giữa các mô hình AI hàng đầu trực tiếp trên cùng một đoạn chat trong OpenAI Codex CLI.
+1. **Đa mô hình trên cùng một phiên chat:** Làm việc và chuyển đổi linh hoạt giữa 8 mô hình AI hàng đầu trực tiếp trên cùng một đoạn chat trong OpenAI Codex CLI:
+   - **Google Antigravity:** `gemini-3.8-flash` (Mới nhất), `gemini-3.7-flash`, `claude-sonnet-4.6-thinking`, `claude-opus-4.6-thinking`.
+   - **OpenAI Codex:** `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`.
+   - **OpenCode Zen (Miễn phí):** `ox-alpha` (Stealth reasoning max).
 2. **Gộp Quota đa tài khoản:** Kết nối nhiều tài khoản OAuth Google và OpenAI, tự động cân bằng tải Round-Robin và tự động chuyển tài khoản khi gặp giới hạn Rate Limit 429 để duy trì làm việc liên tục không bị gián đoạn.
 
 ---
 
 ## 1. Cài đặt
 
-Kịch bản cài đặt tự động tải binary nếu thiếu, cấu hình `config.toml`, nạp cache model chuẩn, khóa chống ghi đè, đồng bộ lịch sử chat cũ và đăng ký lệnh toàn cục `aic` vào PATH và PowerShell Profile.
+Kịch bản cài đặt tự động tải binary nếu thiếu, cấu hình `config.toml`, nạp cache 8 model chuẩn, khóa chống ghi đè, đồng bộ lịch sử chat cũ và đăng ký lệnh toàn cục `aic` cùng hàm Smart Wrapper Hook `codex` vào PATH và PowerShell Profile.
 
 - **Windows (PowerShell):**
   ```powershell
@@ -19,6 +22,9 @@ Kịch bản cài đặt tự động tải binary nếu thiếu, cấu hình `c
   ```bash
   ./install.sh
   ```
+
+**Lưu ý khi cập nhật Codex CLI:**
+Khi Codex CLI update, chọn **Update now**, sau khi hoàn thành update, tắt terminal hiện tại và mở terminal mới để sử dụng. Hook tích hợp sẵn sẽ tự động nhận diện phiên bản mới và đồng bộ cache, mà không cần chạy lại script cài đặt.
 
 ---
 
@@ -91,7 +97,7 @@ agents_in_chat/
 │   ├── configure_codex_toml.py  # Xử lý cấu hình TOML
 │   └── sync_sessions.py         # Đồng bộ lịch sử phiên chat
 ├── docs/
-│   ├── models_cache_template.json # Template 7 models chuẩn
+│   ├── models_cache_template.json # Template 8 models chuẩn
 │   └── KIEN_TRUC_VA_XU_LY_LOI.md # Tài liệu kỹ thuật và xử lý lỗi
 └── tests/
     └── run_tests.py             # Bộ chạy kiểm thử suites

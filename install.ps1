@@ -254,19 +254,51 @@ try {
     $ProfileBlock = @"
 # >>> AIC >>>
 function global:aic { python "$AicPy" `$args }
+function global:codex {
+    `$app = Get-Command -Name "codex.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (`$app) {
+        `$cache = [System.IO.Path]::Combine(`$HOME, ".codex\models_cache.json")
+        if (Test-Path `$cache) {
+            try {
+                `$content = [System.IO.File]::ReadAllText(`$cache)
+                if (`$content -match '"client_version":\s*"([^"]+)"') {
+                    `$cachedVer = `$Matches[1]
+                    `$verOut = & `$app.Source --version 2>`$null
+                    if (`$verOut -match '(\d+\.\d+\.\d+)') {
+                        `$curVer = `$Matches[1]
+                        if (`$cachedVer -ne `$curVer) {
+                            `$content = `$content -replace '"client_version":\s*"[^"]+"', ('"client_version": "' + `$curVer + '"')
+                            Set-ItemProperty -Path `$cache -Name IsReadOnly -Value `$false -ErrorAction SilentlyContinue
+                            [System.IO.File]::WriteAllText(`$cache, `$content, [System.Text.UTF8Encoding]::new(`$false))
+                            Set-ItemProperty -Path `$cache -Name IsReadOnly -Value `$true -ErrorAction SilentlyContinue
+                        }
+                    }
+                }
+            } catch {}
+        }
+        & `$app.Source @args
+    } else {
+        Write-Error "codex.exe not found in PATH."
+    }
+}
 # <<< AIC <<<
 "@
     if (Test-Path $ProfilePath) {
         $pContent = Get-Content $ProfilePath -Raw
-        if ($pContent -notmatch '# >>> AIC >>>' -and $pContent -notmatch 'function global:aic') {
+        if ($pContent -match '(?s)# >>> AIC >>>.*?# <<< AIC <<<') {
+            $newPContent = $pContent -replace '(?s)# >>> AIC >>>.*?# <<< AIC <<<', $ProfileBlock
+            Set-Content -Path $ProfilePath -Value $newPContent.Trim() -Encoding utf8
+            $State_ProfileAdded = $true
+            Write-Host "-> Da cap nhat ham 'aic' & 'codex' wrapper trong PowerShell Profile." -ForegroundColor Green
+        } elseif ($pContent -notmatch 'function global:aic') {
             Add-Content -Path $ProfilePath -Value "`n$ProfileBlock"
             $State_ProfileAdded = $true
-            Write-Host "-> Da dang ky ham 'aic' vao PowerShell Profile." -ForegroundColor Green
+            Write-Host "-> Da dang ky ham 'aic' & 'codex' wrapper vao PowerShell Profile." -ForegroundColor Green
         }
     } else {
         Set-Content -Path $ProfilePath -Value $ProfileBlock -Encoding utf8
         $State_ProfileAdded = $true
-        Write-Host "-> Da khoi tao PowerShell Profile voi ham 'aic'." -ForegroundColor Green
+        Write-Host "-> Da khoi tao PowerShell Profile voi ham 'aic' & 'codex' wrapper." -ForegroundColor Green
     }
 
     # 6. Start proxy service

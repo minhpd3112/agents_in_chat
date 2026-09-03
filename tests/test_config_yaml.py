@@ -19,19 +19,18 @@ def test_config_yaml():
     
     # 2. Check model aliases & force-mapping (Issue 2: Unknown provider)
     aliases = data.get("oauth-model-alias", {}).get("antigravity", [])
-    alias_map = {item.get("name"): item for item in aliases}
     
     for req_name, exp_alias in [
         ("claude-sonnet-4-6", "claude-sonnet-4.6-thinking"),
         ("claude-opus-4-6-thinking", "claude-opus-4.6-thinking"),
-        ("gemini-3.7-flash-high", "gemini-3.7-flash")
+        ("gemini-3.7-flash-high", "gemini-3.7-flash"),
+        ("gemini-3.8-flash-high", "gemini-3.8-flash")
     ]:
-        if req_name not in alias_map:
-            return False, f"Missing alias mapping for {req_name}"
-        if alias_map[req_name].get("alias") != exp_alias:
-            return False, f"Alias for {req_name} is '{alias_map[req_name].get('alias')}', expected '{exp_alias}'"
-        if not alias_map[req_name].get("force-mapping"):
-            return False, f"force-mapping is not true for {req_name}"
+        matching = [item for item in aliases if item.get("name") == req_name and item.get("alias") == exp_alias]
+        if not matching:
+            return False, f"Missing alias mapping for {req_name} -> {exp_alias}"
+        if not matching[0].get("force-mapping"):
+            return False, f"force-mapping is not true for {req_name} -> {exp_alias}"
             
     # 3. Check openai-compatibility (Ox Alpha from OpenCode Zen)
     compat_entries = data.get("openai-compatibility", [])

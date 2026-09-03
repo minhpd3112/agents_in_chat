@@ -43,6 +43,14 @@ oauth-model-alias:
       alias: "gemini-3.7-flash"
       display-name: "Gemini 3.7 Flash (High)"
       force-mapping: true
+    - name: "gemini-3.8-flash-high"
+      alias: "gemini-3.8-flash"
+      display-name: "Gemini 3.8 Flash (High)"
+      force-mapping: true
+    - name: "gemini-3.8-flash"
+      alias: "gemini-3.8-flash"
+      display-name: "Gemini 3.8 Flash (High)"
+      force-mapping: true
 
 oauth-excluded-models:
   codex:

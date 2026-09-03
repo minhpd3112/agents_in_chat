@@ -59,6 +59,7 @@ Sau khi cài đặt, có thể gọi lệnh `aic` từ bất kỳ thư mục nà
 | `aic stop` | Dừng Proxy API và giải phóng RAM |
 | `aic restart` | Khởi động lại Proxy Service |
 | `aic status` | Kiểm tra trạng thái Proxy, Provider và Khóa Cache |
+| `aic update` | Tự động cập nhật AIC lên bản mới nhất từ GitHub và đồng bộ hệ thống |
 | `aic test` | Chạy bộ kiểm thử tự động |
 | `aic login_agy` | Đăng nhập tài khoản Google Antigravity |
 | `aic login_codex` | Đăng nhập tài khoản OpenAI Codex |

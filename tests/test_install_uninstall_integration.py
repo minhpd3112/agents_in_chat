@@ -158,7 +158,7 @@ def run_sh(script_name, env):
         for key in ("AIC_CODEX_DIR", "AIC_PROFILE_PATH", "AIC_USER_PATH_FILE",
                     "AIC_BIN_LINK_DIR", "AIC_AUTHS_DIR", "AIC_AUTHS_BACKUP_DIR",
                     "AIC_FIXTURE_DIR", "AIC_CONFIG_SCRIPT", "AIC_SYNC_SCRIPT",
-                    "AIC_CHECK_CODEX_SCRIPT"):
+                    "AIC_CHECK_CODEX_SCRIPT", "AIC_BACKUP_SCRIPT"):
             if key in env:
                 env[key] = env[key].replace("\\", "/")
     cmd = [bash_bin, str(script_path).replace("\\", "/")]
@@ -175,7 +175,7 @@ def run_integration_tests(platform="windows"):
     run_uninstall = (lambda env: run_ps1("uninstall.ps1", env)) if is_win else (lambda env: run_sh("uninstall.sh", env))
     
     passed = 0
-    total = 17
+    total = 19
 
     auths_snapshot = snapshot_dir(ROOT_DIR / "auths")
     backup_snapshot = snapshot_dir(ROOT_DIR / "auths_backup")
@@ -535,6 +535,57 @@ def run_integration_tests(platform="windows"):
         assert len(list(fake_auths.glob("*"))) == 0
         assert not (codex_dir / "aic-backup").exists()
 
+        print("  -> [PASS]")
+        passed += 1
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    # Case 18: Initial auth backup failure halts installer before any mutations
+    print("Case 18: Initial auth backup failure halts installer before any mutations...")
+    tmp_root, codex_dir, config_path, raw_orig, prof, upath, _, env = setup_integration_env()
+    try:
+        mock_backup = tmp_root / "mock_backup_fail.py"
+        mock_backup.write_text("import sys\nprint('MOCK BACKUP FAILED', file=sys.stderr)\nsys.exit(1)\n", encoding="utf-8")
+        env["AIC_BACKUP_SCRIPT"] = str(mock_backup)
+        r = run_install(env)
+        assert r.returncode != 0, f"Installer must fail when initial backup fails, got code {r.returncode}"
+        assert config_path.read_bytes() == raw_orig, "config.toml must be completely untouched"
+        assert not (codex_dir / "models_cache.json").exists(), "models_cache.json must not be created"
+        if prof.exists():
+            assert "# >>> AIC >>>" not in prof.read_text(encoding="utf-8"), "profile must not be modified"
+        assert not (codex_dir / "aic-backup").exists(), "aic-backup directory must not be created"
+        print("  -> [PASS]")
+        passed += 1
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    # Case 19: Reinstall with initial backup failure preserves existing AIC installation
+    print("Case 19: Reinstall backup failure preserves existing AIC installation...")
+    tmp_root, codex_dir, config_path, raw_orig, prof, upath, _, env = setup_integration_env()
+    try:
+        # First install succeeds
+        r1 = run_install(env)
+        assert r1.returncode == 0, f"Initial install must succeed, got {r1.returncode}"
+        installed_config = config_path.read_bytes()
+        assert b"http://127.0.0.1:8080/v1" in installed_config, "config must point to AIC proxy"
+        cache_file = codex_dir / "models_cache.json"
+        assert cache_file.exists(), "models_cache.json must exist after first install"
+        installed_cache = cache_file.read_bytes()
+        if prof.exists():
+            assert "# >>> AIC >>>" in prof.read_text(encoding="utf-8"), "profile must have AIC block"
+
+        # Reinstall with backup failure injected
+        mock_backup = tmp_root / "mock_backup_fail.py"
+        mock_backup.write_text("import sys\nprint('MOCK BACKUP FAILED', file=sys.stderr)\nsys.exit(1)\n", encoding="utf-8")
+        env["AIC_BACKUP_SCRIPT"] = str(mock_backup)
+
+        r2 = run_install(env)
+        assert r2.returncode != 0, f"Reinstall must fail when backup fails, got code {r2.returncode}"
+        assert config_path.read_bytes() == installed_config, "Existing AIC config.toml must be preserved on reinstall backup failure"
+        assert cache_file.exists(), "Existing models_cache.json must not be deleted on reinstall backup failure"
+        assert cache_file.read_bytes() == installed_cache, "models_cache.json content must be preserved"
+        if prof.exists():
+            assert "# >>> AIC >>>" in prof.read_text(encoding="utf-8"), "Existing profile AIC block must be preserved"
         print("  -> [PASS]")
         passed += 1
     finally:

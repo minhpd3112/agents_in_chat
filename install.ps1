@@ -80,7 +80,7 @@ function Invoke-Rollback {
     Write-Host "-> Dang hoan tac toan dien he thong ve trang thai ban dau..." -ForegroundColor Yellow
 
     # 1. Restore config.toml
-    if ($State_ConfigModified -or (Test-Path (Join-Path $CodexDir "aic-backup"))) {
+    if ($State_ConfigModified) {
         & $PythonExe $ConfigScript restore | Out-Null
     }
     # 2. Rollback sync sessions to openai
@@ -158,15 +158,21 @@ try {
 
     # [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
     Write-Host "`n=== Khoi tao Atomic Auto-Backup cho thu muc auths/ ===" -ForegroundColor Cyan
-    $BackupScript = Join-Path $ScriptDir "scripts\backup_auths.py"
+    $BackupScript = if ($IsTestMode -and $env:AIC_BACKUP_SCRIPT) { $env:AIC_BACKUP_SCRIPT } else { Join-Path $ScriptDir "scripts\backup_auths.py" }
     if (-not (Test-Path $BackupScript)) {
-        throw "Thieu helper bat buoc tai $BackupScript"
+        [Console]::Error.WriteLine("[ERROR] Thieu helper bat buoc tai $BackupScript")
+        exit 1
     }
     New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
     & $PythonExe -B $BackupScript backup
+    if ($LASTEXITCODE -ne 0) {
+        [Console]::Error.WriteLine("[ERROR] Khoi tao sao luu auths that bai. Dinh chi cai dat.")
+        exit 1
+    }
 
     # 2. Backup & Configure TOML
     Write-Host "`n=== Backup & Cau hinh ~/.codex/config.toml ===" -ForegroundColor Cyan
+    $State_ConfigModified = $true
     & $PythonExe $ConfigScript custom
     if ($LASTEXITCODE -ne 0) {
         throw "Cau hinh config.toml that bai."

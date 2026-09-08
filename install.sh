@@ -138,14 +138,21 @@ fi
 mkdir -p "$AUTHS_DIR"
 
 # [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
-BACKUP_SCRIPT="$SCRIPT_DIR/scripts/backup_auths.py"
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_BACKUP_SCRIPT:-}" ]; then
+    BACKUP_SCRIPT="$AIC_BACKUP_SCRIPT"
+else
+    BACKUP_SCRIPT="$SCRIPT_DIR/scripts/backup_auths.py"
+fi
 if [ ! -f "$BACKUP_SCRIPT" ]; then
     echo "[ERROR] Thieu helper bat buoc tai $BACKUP_SCRIPT"
     exit 1
 fi
 echo "=== Khoi tao Atomic Auto-Backup cho thu muc auths/ ==="
 mkdir -p "$BACKUP_DIR"
-"$PYTHON_BIN" -B "$BACKUP_SCRIPT" backup
+if ! "$PYTHON_BIN" -B "$BACKUP_SCRIPT" backup; then
+    echo "[ERROR] Initial auth backup failed. Halting installation." >&2
+    exit 1
+fi
 
 echo "=== Backup & Cau hinh ~/.codex/config.toml ==="
 "$PYTHON_BIN" "$CONFIG_SCRIPT" custom || rollback

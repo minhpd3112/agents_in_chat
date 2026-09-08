@@ -51,6 +51,9 @@ def get_proxy_port() -> int:
         return 8080
 
 
+_last_stop_backup_failed = False
+
+
 def run_auth_backup_hook(action: str) -> int:
     hook_script = ROOT_DIR / "scripts" / "backup_auths.py"
     if not hook_script.exists():
@@ -508,6 +511,9 @@ def verify_managed_state() -> Tuple[str, Optional[Dict[str, Any]]]:
 
 
 def stop_proxy() -> int:
+    global _last_stop_backup_failed
+    _last_stop_backup_failed = False
+
     status, state = verify_managed_state()
 
     if status == "permission_denied":
@@ -525,7 +531,10 @@ def stop_proxy() -> int:
         remove_state()
         info("stale proxy state found and cleaned (PID not running)")
         print("-> CLIProxyAPI hien khong chay.")
-        run_auth_backup_hook("backup")
+        if run_auth_backup_hook("backup") != 0:
+            _last_stop_backup_failed = True
+            warn("Proxy stopped, but auth backup failed.")
+            return 1
         return 0
 
     if status in ("healthy", "unhealthy"):
@@ -535,7 +544,10 @@ def stop_proxy() -> int:
         if stopped:
             remove_state()
             print(f"-> [OFFLINE] Da tat tien trinh CLIProxyAPI thanh cong (PID {pid}).")
-            run_auth_backup_hook("backup")
+            if run_auth_backup_hook("backup") != 0:
+                _last_stop_backup_failed = True
+                warn("Proxy stopped, but auth backup failed.")
+                return 1
             return 0
         else:
             error(f"failed to stop proxy process (PID {pid}) within timeout; state retained")
@@ -548,7 +560,10 @@ def stop_proxy() -> int:
         stopped = terminate_process(pid)
         if stopped:
             print(f"-> [OFFLINE] Da tat tien trinh CLIProxyAPI thanh cong (PID {pid}).")
-            run_auth_backup_hook("backup")
+            if run_auth_backup_hook("backup") != 0:
+                _last_stop_backup_failed = True
+                warn("Proxy stopped, but auth backup failed.")
+                return 1
             return 0
         else:
             error(f"failed to stop adopted proxy process (PID {pid})")
@@ -559,7 +574,10 @@ def stop_proxy() -> int:
         info(f"foreign process on port {port} preserved; proxy is not running")
 
     print("-> CLIProxyAPI hien khong chay.")
-    run_auth_backup_hook("backup")
+    if run_auth_backup_hook("backup") != 0:
+        _last_stop_backup_failed = True
+        warn("Proxy stopped, but auth backup failed.")
+        return 1
     return 0
 
 
@@ -690,6 +708,8 @@ def start_proxy() -> int:
 def restart_proxy() -> int:
     stop_code = stop_proxy()
     if stop_code != 0:
+        if _last_stop_backup_failed:
+            warn("proxy stopped, but auth backup failed; restart will not continue")
         return stop_code
     time.sleep(1)
     return start_proxy()

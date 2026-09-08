@@ -267,7 +267,7 @@ class TestProxyManager(unittest.TestCase):
                     mock_health.assert_called_once()
 
                 with patch("proxy_manager.terminate_process", return_value=True) as mock_kill:
-                    with patch("proxy_manager.run_auth_backup_hook") as mock_backup:
+                    with patch("proxy_manager.run_auth_backup_hook", return_value=0) as mock_backup:
                         rc = proxy_manager.stop_proxy()
                         self.assertEqual(rc, 0)
                         mock_kill.assert_called_with(pid)
@@ -287,7 +287,7 @@ class TestProxyManager(unittest.TestCase):
         
         with patch("proxy_manager.get_process_identity", return_value=("not_found", None, None)):
             with patch("proxy_manager.terminate_process") as mock_kill:
-                with patch("proxy_manager.run_auth_backup_hook") as mock_backup:
+                with patch("proxy_manager.run_auth_backup_hook", return_value=0) as mock_backup:
                     rc = proxy_manager.stop_proxy()
                     self.assertEqual(rc, 0)
                     mock_kill.assert_not_called()
@@ -374,7 +374,7 @@ class TestProxyManager(unittest.TestCase):
         with patch("proxy_manager.verify_managed_state", return_value=("no_state", None)):
             with patch("proxy_manager.adopt_running_proxy", return_value=None):
                 with patch("proxy_manager.is_port_in_use", return_value=False):
-                    with patch("proxy_manager.run_auth_backup_hook"):
+                    with patch("proxy_manager.run_auth_backup_hook", return_value=0):
                         with patch("subprocess.Popen", return_value=mock_proc):
                             # Identity fails
                             with patch("proxy_manager.get_process_identity", return_value=("error", None, None)):
@@ -389,7 +389,7 @@ class TestProxyManager(unittest.TestCase):
         with patch("proxy_manager.verify_managed_state", return_value=("no_state", None)):
             with patch("proxy_manager.adopt_running_proxy", return_value=None):
                 with patch("proxy_manager.is_port_in_use", return_value=False):
-                    with patch("proxy_manager.run_auth_backup_hook"):
+                    with patch("proxy_manager.run_auth_backup_hook", return_value=0):
                         with patch("subprocess.Popen", return_value=mock_proc):
                             with patch("proxy_manager.get_process_identity", return_value=("ok", "/path/exe", "sid123")):
                                 with patch("proxy_manager.write_state", return_value=False):
@@ -428,6 +428,45 @@ class TestProxyManager(unittest.TestCase):
         
         status, _ = proxy_manager.verify_managed_state()
         self.assertEqual(status, "untrusted", "Foreign live PID must be verified as untrusted")
+
+    def test_stop_proxy_returns_1_when_backup_hook_fails(self):
+        pid = 12345
+        state_data = {
+            "state_version": 1,
+            "pid": pid,
+            "exe": str(proxy_manager.get_proxy_exe_path().resolve()),
+            "config": str(proxy_manager.get_config_path().resolve()),
+            "process_start_id": "sid123",
+            "port": 8080
+        }
+        proxy_manager.write_state(state_data)
+        with patch("proxy_manager.verify_managed_state", return_value=("healthy", state_data)):
+            with patch("proxy_manager.terminate_process", return_value=True) as mock_kill:
+                with patch("proxy_manager.run_auth_backup_hook", return_value=1) as mock_backup:
+                    rc = proxy_manager.stop_proxy()
+                    self.assertEqual(rc, 1)
+                    mock_kill.assert_called_with(pid)
+                    mock_backup.assert_called_with("backup")
+                    self.assertFalse(self.state_file.exists())
+                    self.assertTrue(proxy_manager._last_stop_backup_failed)
+
+    def test_restart_aborts_immediately_when_stop_backup_fails(self):
+        with patch("proxy_manager.stop_proxy", return_value=1) as mock_stop:
+            with patch("proxy_manager.start_proxy") as mock_start:
+                proxy_manager._last_stop_backup_failed = True
+                rc = proxy_manager.restart_proxy()
+                self.assertEqual(rc, 1)
+                mock_stop.assert_called_once()
+                mock_start.assert_not_called()
+
+    def test_restart_calls_start_when_stop_succeeds(self):
+        with patch("proxy_manager.stop_proxy", return_value=0) as mock_stop:
+            with patch("proxy_manager.start_proxy", return_value=0) as mock_start:
+                with patch("time.sleep"):
+                    rc = proxy_manager.restart_proxy()
+                    self.assertEqual(rc, 0)
+                    mock_stop.assert_called_once()
+                    mock_start.assert_called_once()
 
 
 if __name__ == "__main__":

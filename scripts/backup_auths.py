@@ -48,16 +48,24 @@ except RuntimeError:
     BACKUP_DIR = None
 
 
+def validate_token_bytes(raw: bytes) -> bool:
+    """Validate raw bytes: non-empty, no NUL bytes, valid JSON."""
+    if not raw or b"\x00" in raw:
+        return False
+    try:
+        json.loads(raw.decode("utf-8"))
+        return True
+    except (ValueError, UnicodeDecodeError):
+        return False
+
+
 def is_valid_json_file(path: Path) -> bool:
     """A token file is healthy iff: >0 bytes, no NUL bytes, parses as JSON."""
     try:
         if not path.is_file() or path.stat().st_size == 0:
             return False
         raw = path.read_bytes()
-        if b"\x00" in raw:
-            return False
-        json.loads(raw.decode("utf-8"))
-        return True
+        return validate_token_bytes(raw)
     except (OSError, ValueError, UnicodeDecodeError):
         return False
 
@@ -73,7 +81,10 @@ def atomic_write(target: Path, data: bytes) -> bool:
         return True
     except OSError as e:
         warn(f"could not write {target.name}: {e}")
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         return False
 
 
@@ -86,35 +97,66 @@ def cmd_backup(auths_dir: Path = None, backup_dir: Path = None) -> int:
     if not auths_dir.is_dir():
         info("No auth files to back up")
         return 0
+
+    files = sorted(auths_dir.glob("*.json"))
+    if not files:
+        info("No auth files to back up")
+        return 0
+
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    updated = kept = skipped = 0
-    for src in sorted(auths_dir.glob("*.json")):
-        if not is_valid_json_file(src):
+    updated = kept = skipped = failed = 0
+    for src in files:
+        try:
+            st = src.stat()
+            if st.st_size == 0:
+                skipped += 1
+                warn(f"skipped empty file: {src.name}")
+                continue
+            data = src.read_bytes()
+        except OSError as e:
+            warn(f"could not read {src.name}: {e}")
+            failed += 1
+            continue
+
+        if not validate_token_bytes(data):
             skipped += 1
+            warn(f"skipped corrupt file: {src.name}")
             continue
+
         dst = backup_dir / src.name
-        data = src.read_bytes()
-        if dst.exists() and dst.read_bytes() == data:
-            kept += 1
-            continue
+        try:
+            if dst.exists() and dst.read_bytes() == data:
+                kept += 1
+                continue
+        except OSError as e:
+            warn(f"could not read existing backup {dst.name}: {e}")
+
         if atomic_write(dst, data):
             updated += 1
+        else:
+            failed += 1
 
     total = updated + kept
-    if total == 0:
+    if total == 0 and skipped == 0 and failed == 0:
+        info("No auth files to back up")
+    elif total == 0 and failed == 0:
         warn("no valid auth files found")
     elif updated:
         info(f"Backed up {updated} auth file(s) to auths_backup/")
     else:
         info(f"Auth backup up to date ({total} file(s))")
+
     if skipped:
         warn(f"skipped {skipped} corrupt file(s)")
+    if failed:
+        warn(f"backup failed for {failed} file(s)")
+        return 1
     return 0
 
 
 def cmd_restore(auths_dir: Path = None, backup_dir: Path = None) -> int:
-    """Repair every corrupt or missing token file from its backup."""
+    """Repair every corrupt token file in auths/ from its backup."""
     if auths_dir is None:
         auths_dir = get_auths_dir()
     if backup_dir is None:
@@ -134,17 +176,8 @@ def cmd_restore(auths_dir: Path = None, backup_dir: Path = None) -> int:
             warn(f"no valid backup for {live.name}")
             lost += 1
 
-    recovered = 0
-    for snap in sorted(backup_dir.glob("*.json")):
-        live = auths_dir / snap.name
-        if not is_valid_json_file(snap) or live.exists():
-            continue
-        if atomic_write(live, snap.read_bytes()):
-            recovered += 1
-
-    fixed = repaired + recovered
-    if fixed:
-        info(f"Restored {fixed} auth file(s) from backup")
+    if repaired:
+        info(f"Restored {repaired} auth file(s) from backup")
     elif lost == 0:
         info("All auth files are healthy")
     return 0

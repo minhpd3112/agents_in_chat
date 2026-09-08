@@ -28,8 +28,9 @@ if (Get-Command python3 -ErrorAction SilentlyContinue) {
 }
 
 $ModelsCachePath = Join-Path $CodexDir "models_cache.json"
-$ConfigScript = Join-Path $ScriptDir "scripts\configure_codex_toml.py"
-$SyncScript = Join-Path $ScriptDir "scripts\sync_sessions.py"
+$ConfigScript = if ($IsTestMode -and $env:AIC_CONFIG_SCRIPT) { $env:AIC_CONFIG_SCRIPT } else { Join-Path $ScriptDir "scripts\configure_codex_toml.py" }
+$SyncScript = if ($IsTestMode -and $env:AIC_SYNC_SCRIPT) { $env:AIC_SYNC_SCRIPT } else { Join-Path $ScriptDir "scripts\sync_sessions.py" }
+$CheckCodexScript = if ($IsTestMode -and $env:AIC_CHECK_CODEX_SCRIPT) { $env:AIC_CHECK_CODEX_SCRIPT } else { Join-Path $ScriptDir "scripts\check_codex_running.py" }
 $BinDir = (Resolve-Path (Join-Path $ScriptDir "bin") -ErrorAction SilentlyContinue).Path
 if (-not $BinDir) { $BinDir = Join-Path $ScriptDir "bin" }
 
@@ -41,6 +42,29 @@ if (-not (Test-Path $ConfigScript)) {
 if (-not (Test-Path $SyncScript)) {
     Write-Error "Thieu helper bat buoc tai $SyncScript"
     exit 1
+}
+if (-not (Test-Path $CheckCodexScript)) {
+    Write-Error "Thieu helper bat buoc tai $CheckCodexScript"
+    exit 1
+}
+
+# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
+& $PythonExe -B $CheckCodexScript
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+# Preflight: Validate auths isolation in test mode
+if ($IsTestMode) {
+    if (-not $env:AIC_AUTHS_DIR -or -not $env:AIC_AUTHS_BACKUP_DIR) {
+        Write-Error "AIC_TEST_MODE=1 requires AIC_AUTHS_DIR and AIC_AUTHS_BACKUP_DIR to be set"
+        exit 1
+    }
+    $AuthsDir = $env:AIC_AUTHS_DIR
+    $BackupDir = $env:AIC_AUTHS_BACKUP_DIR
+} else {
+    $AuthsDir = Join-Path $ScriptDir "auths"
+    $BackupDir = Join-Path $ScriptDir "auths_backup"
 }
 
 # Transaction state tracking for full rollback
@@ -70,10 +94,9 @@ function Invoke-Rollback {
         Remove-Item -Path $ModelsCachePath -Force -ErrorAction SilentlyContinue
     }
     # 4. Remove profile block if added
-    if ($State_ProfileAdded -and (Test-Path $ProfilePath)) {
-        $pContent = Get-Content $ProfilePath -Raw
-        $cleaned = $pContent -replace '(?s)\r?\n?# >>> AIC >>>.*?# <<< AIC <<<', ''
-        Set-Content -Path $ProfilePath -Value $cleaned.Trim() -Encoding utf8
+    if ($State_ProfileAdded) {
+        $ProfileStateFile = Join-Path $CodexDir "aic_profile_rollback.json"
+        & $PythonExe (Join-Path $ScriptDir "scripts\manage_profile.py") --profile "$ProfilePath" --action rollback --state-file "$ProfileStateFile" | Out-Null
     }
     # 5. Remove PATH entry if added
     if ($State_PathAdded) {
@@ -101,7 +124,7 @@ try {
 
     # Proxy binary
     $ProxyExe = Join-Path $ScriptDir "cli-proxy-api.exe"
-    if (-not (Test-Path $ProxyExe) -and -not $SkipDownload) {
+    if (-not $IsTestMode -and -not (Test-Path $ProxyExe) -and -not $SkipDownload) {
         Write-Host "-> Khong tim thay cli-proxy-api.exe tai thu muc goc." -ForegroundColor Yellow
         Write-Host "-> Dang tai CLIProxyAPI ban moi nhat tu GitHub Releases..." -ForegroundColor Cyan
         $ZipPath = Join-Path $ScriptDir "CLIProxyAPI.zip"
@@ -123,15 +146,14 @@ try {
     # config.yaml
     $ConfigFile = Join-Path $ScriptDir "config.yaml"
     $ConfigExample = Join-Path $ScriptDir "config.example.yaml"
-    if (-not (Test-Path $ConfigFile) -and (Test-Path $ConfigExample)) {
+    if (-not $IsTestMode -and -not (Test-Path $ConfigFile) -and (Test-Path $ConfigExample)) {
         Copy-Item -Path $ConfigExample -Destination $ConfigFile -Force
         Write-Host "-> Da khoi tao config.yaml tu config.example.yaml." -ForegroundColor Green
     }
 
     # auths dir
-    $AuthsDir = Join-Path $ScriptDir "auths"
     if (-not (Test-Path $AuthsDir)) {
-        New-Item -ItemType Directory -Path $AuthsDir | Out-Null
+        New-Item -ItemType Directory -Path $AuthsDir -Force | Out-Null
     }
 
     # [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
@@ -140,7 +162,7 @@ try {
     if (-not (Test-Path $BackupScript)) {
         throw "Thieu helper bat buoc tai $BackupScript"
     }
-    New-Item -ItemType Directory -Path (Join-Path $ScriptDir "auths_backup") -Force | Out-Null
+    New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
     & $PythonExe -B $BackupScript backup
 
     # 2. Backup & Configure TOML
@@ -176,10 +198,6 @@ try {
     Set-ItemProperty -Path $ModelsCachePath -Name IsReadOnly -Value $true
     $State_CacheModified = $true
 
-    $AuthsDir = Join-Path $ScriptDir "auths"
-    if (-not (Test-Path $AuthsDir)) {
-        New-Item -ItemType Directory -Path $AuthsDir -Force | Out-Null
-    }
     $ZenAuthPath = Join-Path $AuthsDir "openai-compatible-opencode-zen.json"
     if (-not (Test-Path $ZenAuthPath)) {
         $ZenAuthJson = @'
@@ -246,31 +264,17 @@ try {
     $ProfileDir = Split-Path -Parent $ProfilePath
     if (-not (Test-Path $ProfileDir)) { New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null }
     $AicPy = Join-Path $BinDir "aic.py"
+    $SyncHelperPy = Join-Path $ScriptDir "scripts\sync_client_version.py"
     $ProfileBlock = @"
 # >>> AIC >>>
-function global:aic { python "$AicPy" `$args }
+function global:aic { & "$PythonExe" "$AicPy" `$args }
 function global:codex {
-    `$app = Get-Command -Name "codex.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    `$syncHelper = "$SyncHelperPy"
+    if (Test-Path `$syncHelper) {
+        try { & "$PythonExe" `$syncHelper } catch {}
+    }
+    `$app = Get-Command -Name "codex.exe" -CommandType Application -ErrorAction SilentlyContinue | Where-Object { `$_.Source -ne `$MyInvocation.MyCommand.Definition } | Select-Object -First 1
     if (`$app) {
-        `$cache = [System.IO.Path]::Combine(`$HOME, ".codex\models_cache.json")
-        if (Test-Path `$cache) {
-            try {
-                `$content = [System.IO.File]::ReadAllText(`$cache)
-                if (`$content -match '"client_version":\s*"([^"]+)"') {
-                    `$cachedVer = `$Matches[1]
-                    `$verOut = & `$app.Source --version 2>`$null
-                    if (`$verOut -match '(\d+\.\d+\.\d+)') {
-                        `$curVer = `$Matches[1]
-                        if (`$cachedVer -ne `$curVer) {
-                            `$content = `$content -replace '"client_version":\s*"[^"]+"', ('"client_version": "' + `$curVer + '"')
-                            Set-ItemProperty -Path `$cache -Name IsReadOnly -Value `$false -ErrorAction SilentlyContinue
-                            [System.IO.File]::WriteAllText(`$cache, `$content, [System.Text.UTF8Encoding]::new(`$false))
-                            Set-ItemProperty -Path `$cache -Name IsReadOnly -Value `$true -ErrorAction SilentlyContinue
-                        }
-                    }
-                }
-            } catch {}
-        }
         & `$app.Source @args
     } else {
         Write-Error "codex.exe not found in PATH."
@@ -278,23 +282,24 @@ function global:codex {
 }
 # <<< AIC <<<
 "@
-    if (Test-Path $ProfilePath) {
-        $pContent = Get-Content $ProfilePath -Raw
-        if ($pContent -match '(?s)# >>> AIC >>>.*?# <<< AIC <<<') {
-            $newPContent = $pContent -replace '(?s)# >>> AIC >>>.*?# <<< AIC <<<', $ProfileBlock
-            Set-Content -Path $ProfilePath -Value $newPContent.Trim() -Encoding utf8
-            $State_ProfileAdded = $true
-            Write-Host "-> Da cap nhat ham 'aic' & 'codex' wrapper trong PowerShell Profile." -ForegroundColor Green
-        } elseif ($pContent -notmatch 'function global:aic') {
-            Add-Content -Path $ProfilePath -Value "`n$ProfileBlock"
-            $State_ProfileAdded = $true
-            Write-Host "-> Da dang ky ham 'aic' & 'codex' wrapper vao PowerShell Profile." -ForegroundColor Green
+    $ProfileStateFile = Join-Path $CodexDir "aic_profile_rollback.json"
+    $ManageProfile = Join-Path $ScriptDir "scripts\manage_profile.py"
+    $ProfileBlockTemp = [System.IO.Path]::GetTempFileName()
+    try {
+        [System.IO.File]::WriteAllText($ProfileBlockTemp, $ProfileBlock, [System.Text.UTF8Encoding]::new($false))
+        & $PythonExe $ManageProfile --profile "$ProfilePath" --action install --block-file "$ProfileBlockTemp" --state-file "$ProfileStateFile"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dang ky profile that bai."
         }
-    } else {
-        Set-Content -Path $ProfilePath -Value $ProfileBlock -Encoding utf8
-        $State_ProfileAdded = $true
-        Write-Host "-> Da khoi tao PowerShell Profile voi ham 'aic' & 'codex' wrapper." -ForegroundColor Green
     }
+    finally {
+        if (Test-Path $ProfileBlockTemp) {
+            Remove-Item $ProfileBlockTemp -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $State_ProfileAdded = $true
+    Write-Host "-> Da dang ky ham 'aic' & 'codex' wrapper vao PowerShell Profile." -ForegroundColor Green
+
 
     # 6. Start proxy service
     Write-Host "`n=== Khoi dong CLIProxyAPI Service ===" -ForegroundColor Cyan
@@ -309,6 +314,11 @@ function global:codex {
         }
     } else {
         Write-Host "-> [TEST_MODE] Bo qua khoi dong proxy." -ForegroundColor Yellow
+    }
+
+    # Clean up profile transaction state on install success
+    if (Test-Path $ProfileStateFile) {
+        Remove-Item -Path $ProfileStateFile -Force -ErrorAction SilentlyContinue
     }
 
     Write-Host "`n🎉 AIC installed successfully! Run 'aic' or 'codex' to get started.`n" -ForegroundColor Green

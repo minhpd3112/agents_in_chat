@@ -17,8 +17,35 @@ from pathlib import Path
 from log_utils import info, warn
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-AUTHS_DIR = ROOT_DIR / "auths"
-BACKUP_DIR = ROOT_DIR / "auths_backup"
+
+
+def get_auths_dir() -> Path:
+    if os.environ.get("AIC_TEST_MODE") == "1":
+        override = os.environ.get("AIC_AUTHS_DIR")
+        if not override:
+            raise RuntimeError("AIC_TEST_MODE=1 requires AIC_AUTHS_DIR to be set")
+        return Path(override)
+    return ROOT_DIR / "auths"
+
+
+def get_backup_dir() -> Path:
+    if os.environ.get("AIC_TEST_MODE") == "1":
+        override = os.environ.get("AIC_AUTHS_BACKUP_DIR")
+        if not override:
+            raise RuntimeError("AIC_TEST_MODE=1 requires AIC_AUTHS_BACKUP_DIR to be set")
+        return Path(override)
+    return ROOT_DIR / "auths_backup"
+
+
+try:
+    AUTHS_DIR = get_auths_dir()
+except RuntimeError:
+    AUTHS_DIR = None
+
+try:
+    BACKUP_DIR = get_backup_dir()
+except RuntimeError:
+    BACKUP_DIR = None
 
 
 def is_valid_json_file(path: Path) -> bool:
@@ -50,8 +77,12 @@ def atomic_write(target: Path, data: bytes) -> bool:
         return False
 
 
-def cmd_backup(auths_dir: Path = AUTHS_DIR, backup_dir: Path = BACKUP_DIR) -> int:
+def cmd_backup(auths_dir: Path = None, backup_dir: Path = None) -> int:
     """Snapshot only 100%-valid token files (atomic copy, idempotent)."""
+    if auths_dir is None:
+        auths_dir = get_auths_dir()
+    if backup_dir is None:
+        backup_dir = get_backup_dir()
     if not auths_dir.is_dir():
         info("No auth files to back up")
         return 0
@@ -82,8 +113,12 @@ def cmd_backup(auths_dir: Path = AUTHS_DIR, backup_dir: Path = BACKUP_DIR) -> in
     return 0
 
 
-def cmd_restore(auths_dir: Path = AUTHS_DIR, backup_dir: Path = BACKUP_DIR) -> int:
+def cmd_restore(auths_dir: Path = None, backup_dir: Path = None) -> int:
     """Repair every corrupt or missing token file from its backup."""
+    if auths_dir is None:
+        auths_dir = get_auths_dir()
+    if backup_dir is None:
+        backup_dir = get_backup_dir()
     if not auths_dir.is_dir() or not backup_dir.is_dir():
         return 0
 
@@ -115,8 +150,10 @@ def cmd_restore(auths_dir: Path = AUTHS_DIR, backup_dir: Path = BACKUP_DIR) -> i
     return 0
 
 
-def cmd_verify(auths_dir: Path = AUTHS_DIR) -> int:
+def cmd_verify(auths_dir: Path = None) -> int:
     """Report token health; exit 1 when any file is corrupt."""
+    if auths_dir is None:
+        auths_dir = get_auths_dir()
     files = sorted(auths_dir.glob("*.json")) if auths_dir.is_dir() else []
     bad = [f for f in files if not is_valid_json_file(f)]
     info(f"auths/: {len(files) - len(bad)} ok, {len(bad)} corrupted")
@@ -133,7 +170,7 @@ def main(argv=None) -> int:
         return 2
     try:
         return commands[argv[0]]()
-    except OSError as e:
+    except (OSError, RuntimeError) as e:
         warn(str(e))
         return 1
 

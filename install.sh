@@ -17,8 +17,18 @@ AIC_SKIP_PROXY="${AIC_SKIP_PROXY:-0}"
 AIC_FAIL_STEP="${AIC_FAIL_STEP:-}"
 
 MODELS_CACHE="$CODEX_DIR/models_cache.json"
-CONFIG_SCRIPT="$SCRIPT_DIR/scripts/configure_codex_toml.py"
-SYNC_SCRIPT="$SCRIPT_DIR/scripts/sync_sessions.py"
+
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_CONFIG_SCRIPT:-}" ]; then
+    CONFIG_SCRIPT="$AIC_CONFIG_SCRIPT"
+else
+    CONFIG_SCRIPT="$SCRIPT_DIR/scripts/configure_codex_toml.py"
+fi
+
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_SYNC_SCRIPT:-}" ]; then
+    SYNC_SCRIPT="$AIC_SYNC_SCRIPT"
+else
+    SYNC_SCRIPT="$SCRIPT_DIR/scripts/sync_sessions.py"
+fi
 
 # Preflight: Mandatory Helper validation
 if [ ! -f "$CONFIG_SCRIPT" ]; then
@@ -41,7 +51,37 @@ else
     exit 1
 fi
 
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_CHECK_CODEX_SCRIPT:-}" ]; then
+    CHECK_CODEX_SCRIPT="$AIC_CHECK_CODEX_SCRIPT"
+else
+    CHECK_CODEX_SCRIPT="$SCRIPT_DIR/scripts/check_codex_running.py"
+fi
+if [ ! -f "$CHECK_CODEX_SCRIPT" ]; then
+    echo "[ERROR] Thieu helper bat buoc tai $CHECK_CODEX_SCRIPT"
+    exit 1
+fi
+
+# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
+"$PYTHON_BIN" -B "$CHECK_CODEX_SCRIPT" || exit $?
+
+# Preflight: Validate auths isolation in test mode
+if [ "$AIC_TEST_MODE" = "1" ]; then
+    if [ -z "${AIC_AUTHS_DIR:-}" ] || [ -z "${AIC_AUTHS_BACKUP_DIR:-}" ]; then
+        echo "[ERROR] AIC_TEST_MODE=1 requires AIC_AUTHS_DIR and AIC_AUTHS_BACKUP_DIR to be set" >&2
+        exit 1
+    fi
+    AUTHS_DIR="$AIC_AUTHS_DIR"
+    BACKUP_DIR="$AIC_AUTHS_BACKUP_DIR"
+else
+    AUTHS_DIR="$SCRIPT_DIR/auths"
+    BACKUP_DIR="$SCRIPT_DIR/auths_backup"
+fi
+
+
 STATE_SYMLINK_ADDED=0
+STATE_PROFILE_ADDED=0
+PROFILE_FILE=""
+PROFILE_STATE_FILE="$CODEX_DIR/aic_profile_rollback.json"
 
 rollback() {
     echo -e "\n[ROLLBACK] Phat hien su co, dang hoan tac toan dien he thong..."
@@ -51,6 +91,9 @@ rollback() {
     if [ -f "$MODELS_CACHE" ]; then
         chmod 644 "$MODELS_CACHE" 2>/dev/null || true
         rm -f "$MODELS_CACHE"
+    fi
+    if [ "$STATE_PROFILE_ADDED" -eq 1 ] && [ -n "$PROFILE_FILE" ]; then
+        "$PYTHON_BIN" "$SCRIPT_DIR/scripts/manage_profile.py" --profile "$PROFILE_FILE" --action rollback --state-file "$PROFILE_STATE_FILE" >/dev/null 2>&1 || true
     fi
     if [ "$STATE_SYMLINK_ADDED" -eq 1 ] && [ -L "$BIN_LINK_DIR/aic" ]; then
         rm -f "$BIN_LINK_DIR/aic"
@@ -71,7 +114,7 @@ if [ ! -f "$PROXY_BIN" ] && [ -f "$SCRIPT_DIR/cli-proxy-api.exe" ]; then
     PROXY_BIN="$SCRIPT_DIR/cli-proxy-api.exe"
 fi
 
-if [ ! -f "$PROXY_BIN" ] && [ "$AIC_SKIP_DOWNLOAD" -ne 1 ]; then
+if [ "$AIC_TEST_MODE" != "1" ] && [ ! -f "$PROXY_BIN" ] && [ "$AIC_SKIP_DOWNLOAD" -ne 1 ]; then
     echo "-> Khong tim thay binary cli-proxy-api, dang tai tu GitHub Releases..."
     OS="$(uname -s)"
     ARCH="$(uname -m)"
@@ -87,12 +130,11 @@ if [ ! -f "$PROXY_BIN" ] && [ "$AIC_SKIP_DOWNLOAD" -ne 1 ]; then
     fi
 fi
 
-if [ ! -f "$SCRIPT_DIR/config.yaml" ] && [ -f "$SCRIPT_DIR/config.example.yaml" ]; then
+if [ "$AIC_TEST_MODE" != "1" ] && [ ! -f "$SCRIPT_DIR/config.yaml" ] && [ -f "$SCRIPT_DIR/config.example.yaml" ]; then
     cp "$SCRIPT_DIR/config.example.yaml" "$SCRIPT_DIR/config.yaml"
     echo "-> Da khoi tao config.yaml tu config.example.yaml."
 fi
 
-AUTHS_DIR="$SCRIPT_DIR/auths"
 mkdir -p "$AUTHS_DIR"
 
 # [SAFETY] Khoi tao kho sao luu token & chup snapshot ban dau
@@ -102,7 +144,7 @@ if [ ! -f "$BACKUP_SCRIPT" ]; then
     exit 1
 fi
 echo "=== Khoi tao Atomic Auto-Backup cho thu muc auths/ ==="
-mkdir -p "$SCRIPT_DIR/auths_backup"
+mkdir -p "$BACKUP_DIR"
 "$PYTHON_BIN" -B "$BACKUP_SCRIPT" backup
 
 echo "=== Backup & Cau hinh ~/.codex/config.toml ==="
@@ -118,9 +160,9 @@ fi
 mkdir -p "$CODEX_DIR"
 chmod 644 "$MODELS_CACHE" 2>/dev/null || true
 "$PYTHON_BIN" -c "
-import json, subprocess, re
-template_path = '$TEMPLATE_JSON'
-cache_path = '$MODELS_CACHE'
+import sys, json, subprocess, re
+template_path = sys.argv[1]
+cache_path = sys.argv[2]
 with open(template_path, 'r', encoding='utf-8') as f:
     data = json.load(f)
 ver = data.get('client_version', '0.153.0')
@@ -132,11 +174,9 @@ except Exception: pass
 data['client_version'] = ver
 with open(cache_path, 'w', encoding='utf-8', newline='\n') as f:
     json.dump(data, f, indent=2)
-" 2>/dev/null || cp -f "$TEMPLATE_JSON" "$MODELS_CACHE"
+" "$TEMPLATE_JSON" "$MODELS_CACHE" 2>/dev/null || cp -f "$TEMPLATE_JSON" "$MODELS_CACHE"
 chmod 444 "$MODELS_CACHE"
 
-AUTHS_DIR="$SCRIPT_DIR/auths"
-mkdir -p "$AUTHS_DIR"
 ZEN_AUTH="$AUTHS_DIR/openai-compatible-opencode-zen.json"
 if [ ! -f "$ZEN_AUTH" ]; then
     cat << 'EOF' > "$ZEN_AUTH"
@@ -156,7 +196,7 @@ if [ ! -f "$ZEN_AUTH" ]; then
 EOF
 fi
 
-MODEL_COUNT=$("$PYTHON_BIN" -c "import json; print(len(json.load(open('$TEMPLATE_JSON', encoding='utf-8')).get('models', [])))" 2>/dev/null || echo "")
+MODEL_COUNT=$("$PYTHON_BIN" -c "import sys, json; print(len(json.load(open(sys.argv[1], encoding='utf-8')).get('models', [])))" "$TEMPLATE_JSON" 2>/dev/null || echo "")
 if [ -n "$MODEL_COUNT" ] && [ "$MODEL_COUNT" -gt 0 ] 2>/dev/null; then
     echo "-> Da nap $MODEL_COUNT dinh nghia model & KHOA READ-ONLY cache menu cho Codex CLI."
 else
@@ -178,24 +218,39 @@ else
     echo "-> Da tao symlink toan cuc 'aic' tai $BIN_LINK_DIR/aic"
 fi
 
-# Register alias in ~/.bashrc or ~/.zshrc
+# Register Smart Wrapper & alias in ~/.bashrc or ~/.zshrc
 PROFILE_FILE=""
-if [ -n "$AIC_PROFILE_PATH" ]; then
+if [ -n "${AIC_PROFILE_PATH:-}" ]; then
     PROFILE_FILE="$AIC_PROFILE_PATH"
 elif [ -f "$HOME/.zshrc" ]; then
     PROFILE_FILE="$HOME/.zshrc"
 elif [ -f "$HOME/.bashrc" ]; then
     PROFILE_FILE="$HOME/.bashrc"
+else
+    PROFILE_FILE="$HOME/.bashrc"
 fi
 
 if [ -n "$PROFILE_FILE" ]; then
-    if ! grep -q "alias aic=" "$PROFILE_FILE" 2>/dev/null; then
-        echo "" >> "$PROFILE_FILE"
-        echo "# >>> AIC >>>" >> "$PROFILE_FILE"
-        echo "alias aic=\"$PYTHON_BIN $SCRIPT_DIR/bin/aic.py\"" >> "$PROFILE_FILE"
-        echo "# <<< AIC <<<" >> "$PROFILE_FILE"
-        echo "-> Da dang ky alias 'aic' vao $PROFILE_FILE"
+    SYNC_HELPER="$SCRIPT_DIR/scripts/sync_client_version.py"
+    AIC_PY="$SCRIPT_DIR/bin/aic.py"
+    PROFILE_BLOCK=$(cat << EOF
+# >>> AIC >>>
+aic() {
+    "$PYTHON_BIN" "$AIC_PY" "\$@"
+}
+codex() {
+    if [ -f "$SYNC_HELPER" ]; then
+        "$PYTHON_BIN" "$SYNC_HELPER"
     fi
+    command codex "\$@"
+}
+# <<< AIC <<<
+EOF
+)
+    PROFILE_STATE_FILE="$CODEX_DIR/aic_profile_rollback.json"
+    "$PYTHON_BIN" "$SCRIPT_DIR/scripts/manage_profile.py" --profile "$PROFILE_FILE" --action install --block-text "$PROFILE_BLOCK" --state-file "$PROFILE_STATE_FILE" || rollback
+    STATE_PROFILE_ADDED=1
+    echo "-> Da dang ky ham 'aic' & 'codex' Smart Wrapper vao $PROFILE_FILE"
 fi
 
 echo "=== Khoi dong CLIProxyAPI ==="
@@ -210,5 +265,8 @@ if [ "$AIC_SKIP_PROXY" -ne 1 ]; then
 else
     echo "-> [TEST_MODE] Bo qua khoi dong proxy."
 fi
+
+# Clean up profile transaction state on install success
+rm -f "$PROFILE_STATE_FILE" 2>/dev/null || true
 
 echo -e "\n🎉 AIC installed successfully! Run 'aic' or 'codex' to get started.\n"

@@ -16,8 +16,18 @@ AIC_SKIP_PROXY="${AIC_SKIP_PROXY:-0}"
 AIC_FAIL_STEP="${AIC_FAIL_STEP:-}"
 
 MODELS_CACHE="$CODEX_DIR/models_cache.json"
-CONFIG_SCRIPT="$SCRIPT_DIR/scripts/configure_codex_toml.py"
-SYNC_SCRIPT="$SCRIPT_DIR/scripts/sync_sessions.py"
+
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_CONFIG_SCRIPT:-}" ]; then
+    CONFIG_SCRIPT="$AIC_CONFIG_SCRIPT"
+else
+    CONFIG_SCRIPT="$SCRIPT_DIR/scripts/configure_codex_toml.py"
+fi
+
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_SYNC_SCRIPT:-}" ]; then
+    SYNC_SCRIPT="$AIC_SYNC_SCRIPT"
+else
+    SYNC_SCRIPT="$SCRIPT_DIR/scripts/sync_sessions.py"
+fi
 
 # Preflight: Mandatory Helper validation
 if [ ! -f "$CONFIG_SCRIPT" ]; then
@@ -40,7 +50,22 @@ else
     exit 1
 fi
 
+if [ "$AIC_TEST_MODE" = "1" ] && [ -n "${AIC_CHECK_CODEX_SCRIPT:-}" ]; then
+    CHECK_CODEX_SCRIPT="$AIC_CHECK_CODEX_SCRIPT"
+else
+    CHECK_CODEX_SCRIPT="$SCRIPT_DIR/scripts/check_codex_running.py"
+fi
+if [ ! -f "$CHECK_CODEX_SCRIPT" ]; then
+    echo "[ERROR] Thieu helper bat buoc tai $CHECK_CODEX_SCRIPT"
+    exit 1
+fi
+
+# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
+"$PYTHON_BIN" -B "$CHECK_CODEX_SCRIPT" || exit $?
+
+
 echo "=== Khoi phuc cai dat goc OpenAI Codex CLI ==="
+
 
 # 1. Tat proxy
 echo "-> Dang tat tien trinh Proxy API..."
@@ -100,8 +125,31 @@ if [ -L "$BIN_LINK_DIR/aic" ]; then
     echo "-> Da go bo symlink toan cuc 'aic'."
 fi
 
+# 6b. Go bo block 'aic' khoi profile
+echo "-> Go bo block 'aic' khoi profile..."
+PROFILE_FILE=""
+if [ -n "${AIC_PROFILE_PATH:-}" ]; then
+    PROFILE_FILE="$AIC_PROFILE_PATH"
+elif [ -f "$HOME/.zshrc" ]; then
+    PROFILE_FILE="$HOME/.zshrc"
+elif [ -f "$HOME/.bashrc" ]; then
+    PROFILE_FILE="$HOME/.bashrc"
+fi
+if [ -n "$PROFILE_FILE" ] && [ -f "$PROFILE_FILE" ]; then
+    "$PYTHON_BIN" "$SCRIPT_DIR/scripts/manage_profile.py" --profile "$PROFILE_FILE" --action uninstall
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "[ERROR] Go bo block 'aic' khoi profile that bai."
+        exit $rc
+    fi
+    echo "-> Da go bo block 'aic' khoi $PROFILE_FILE"
+fi
+PROFILE_STATE_FILE="$CODEX_DIR/aic_profile_rollback.json"
+rm -f "$PROFILE_STATE_FILE" 2>/dev/null || true
+
 # 7. Don dep thu muc aic-backup
 "$PYTHON_BIN" "$CONFIG_SCRIPT" clean-backup >/dev/null 2>&1 || true
+
 
 echo "============================================================"
 echo "   DA KHOI PHUC CAI DAT GOC & GO BO 'aic' THANH CONG 100%!"

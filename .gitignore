@@ -33,6 +33,9 @@ logs/
 tmp/
 temp/
 *.tmp
+.proxy_state.json
+*.pid
+
 
 # Operating System Files
 .DS_Store

@@ -1,30 +1,7 @@
-# Start CLIProxyAPI completely hidden & detached
+# Start CLIProxyAPI
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ScriptDir) { $ScriptDir = Get-Location }
-$ProxyExe = Join-Path $ScriptDir "cli-proxy-api.exe"
-
-# [SAFETY] Auto-Recovery: phuc hoi moi file token hong (NUL-byte/0-byte/JSON loi)
-# tu auths_backup/ TRUOC khi proxy duoc khoi chay.
-$BackupScript = Join-Path $ScriptDir "scripts\backup_auths.py"
 $PythonBin = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
-& $PythonBin -B $BackupScript restore
-
-$conn = Test-NetConnection -ComputerName "127.0.0.1" -Port 8080 -WarningAction SilentlyContinue
-if ($conn.TcpTestSucceeded) {
-    Write-Host "-> [ONLINE] CLIProxyAPI dang hoat dong san sang." -ForegroundColor Yellow
-    return
-}
-
-$ConfigFile = Join-Path $ScriptDir "config.yaml"
-$startup = New-CimInstance -ClassName Win32_ProcessStartup -Property @{ ShowWindow = [UInt16]0 } -ClientOnly
-$proc = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "`"$ProxyExe`" -config `"$ConfigFile`""; CurrentDirectory = "$ScriptDir"; ProcessStartupInformation = $startup }
-Start-Sleep -Seconds 2
-
-$PortCheck = Test-NetConnection -ComputerName "127.0.0.1" -Port 8080 -WarningAction SilentlyContinue
-if ($PortCheck.TcpTestSucceeded) {
-    Write-Host "-> [ONLINE] CLIProxyAPI da khoi dong chay ngam thanh cong." -ForegroundColor Green
-    return
-} else {
-    Write-Host "-> [WARNING] Da chay binary nhung dich vu proxy chua phan hoi." -ForegroundColor Yellow
-    exit 1
-}
+$ProxyManager = Join-Path $ScriptDir "scripts\proxy_manager.py"
+& $PythonBin -B $ProxyManager start
+exit $LASTEXITCODE

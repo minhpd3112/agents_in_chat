@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
+set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if pkill -f "cli-proxy-api"; then
-    echo "-> [OFFLINE] Da tat tien trinh CLIProxyAPI."
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
 else
-    echo "-> CLIProxyAPI hien khong chay."
+    echo "Error: Python (python3 or python) not found in PATH." >&2
+    exit 1
 fi
-
-# [SAFETY] Auto-Backup: snapshot trang thai token moi nhat sau khi proxy da dung han.
-PYTHON_BIN="$(command -v python3 || command -v python)"
-if [ -f "$SCRIPT_DIR/scripts/backup_auths.py" ]; then
-    "$PYTHON_BIN" -B "$SCRIPT_DIR/scripts/backup_auths.py" backup || true
-fi
+exec "$PYTHON_BIN" -B "$SCRIPT_DIR/scripts/proxy_manager.py" stop

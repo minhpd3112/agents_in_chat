@@ -1,4 +1,51 @@
-﻿#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$SCRIPT_DIR/aic.py" "$@" 2>/dev/null || python "$SCRIPT_DIR/aic.py" "$@"
+#!/usr/bin/env bash
+set -e
+# Resolve script directory without external dirname dependency
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+    TARGET="$(readlink "$SCRIPT_PATH" 2>/dev/null)" || break
+    if [ "${TARGET:0:1}" = "/" ]; then
+        SCRIPT_PATH="$TARGET"
+    else
+        DIR="${SCRIPT_PATH%/*}"
+        [ "$DIR" = "$SCRIPT_PATH" ] && DIR="."
+        SCRIPT_PATH="$DIR/$TARGET"
+    fi
+done
+
+SCRIPT_DIR="${SCRIPT_PATH%/*}"
+if [ "$SCRIPT_DIR" = "$SCRIPT_PATH" ]; then
+    SCRIPT_DIR="."
+fi
+
+if ! cd "$SCRIPT_DIR" 2>/dev/null; then
+    echo "Error: Cannot access script directory: $SCRIPT_DIR" >&2
+    exit 1
+fi
+
+if pwd_w=$(pwd -W 2>/dev/null) && [ -n "$pwd_w" ]; then
+    SCRIPT_DIR="$pwd_w"
+else
+    SCRIPT_DIR="$(pwd 2>/dev/null)" || {
+        echo "Error: Failed to determine working directory." >&2
+        exit 1
+    }
+fi
+
+if [ ! -f "$SCRIPT_DIR/aic.py" ]; then
+    echo "Error: aic.py not found in $SCRIPT_DIR" >&2
+    exit 1
+fi
+
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+else
+    echo "Error: Python (python3 or python) not found in PATH." >&2
+    exit 1
+fi
+
+exec "$PYTHON_BIN" "$SCRIPT_DIR/aic.py" "$@"
 

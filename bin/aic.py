@@ -25,20 +25,9 @@ CODEX_DIR = Path(os.path.expanduser("~/.codex"))
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 from log_utils import error, info, warn  # noqa: E402
 from check_updates import get_local_version, check_for_update, prompt_update_if_available, run_update  # noqa: E402
+from proxy_manager import start_proxy, stop_proxy, restart_proxy, check_proxy_health  # noqa: E402
 
 VERSION = get_local_version()
-
-def check_proxy_health():
-    try:
-        req = urllib.request.Request("http://127.0.0.1:8080/v1/models", headers={"User-Agent": "aic-cli"})
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
-            if resp.status == 200:
-                data = json.loads(resp.read().decode("utf-8"))
-                models = [m.get("id") for m in data.get("data", [])]
-                return True, models
-    except Exception:
-        pass
-    return False, []
 
 def ensure_default_compat_auth():
     auth_dir = ROOT_DIR / "auths"
@@ -57,69 +46,17 @@ def ensure_default_compat_auth():
         }
         zen_auth.write_text(json.dumps(auth_data, indent=2), encoding="utf-8")
 
-def run_auth_backup_hook(action: str) -> int:
-    hook_script = ROOT_DIR / "scripts" / "backup_auths.py"
-    if not hook_script.exists():
-        return 0
-    try:
-        res = subprocess.run([sys.executable, "-B", str(hook_script), action], cwd=str(ROOT_DIR))
-        return res.returncode
-    except Exception as e:
-        warn(f"auth backup hook '{action}' failed: {e}")
-        return 0
-
 def cmd_start() -> int:
     prompt_update_if_available()
     ensure_default_compat_auth()
-    # [SAFETY] Auto-Recovery: phuc hoi token hong tu auths_backup/ truoc khi khoi dong proxy.
-    run_auth_backup_hook("restore")
-    online, _ = check_proxy_health()
-    if online:
-        info("proxy service already running")
-        return 0
-
-    info("starting proxy service...")
-    if sys.platform == "win32":
-        ps_script = ROOT_DIR / "start.ps1"
-        res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
-        if res.returncode != 0:
-            return res.returncode
-    else:
-        sh_script = ROOT_DIR / "start.sh"
-        res = subprocess.run(["bash", str(sh_script)])
-        if res.returncode != 0:
-            return res.returncode
-
-    import time
-    for _ in range(5):
-        time.sleep(1)
-        ok, models = check_proxy_health()
-        if ok:
-            info(f"proxy started ({len(models)} models online)")
-            return 0
-    warn("binary launched but proxy not responding")
-    return 1
-
+    return start_proxy()
 
 def cmd_stop() -> int:
-    info("stopping proxy service...")
-    if sys.platform == "win32":
-        ps_script = ROOT_DIR / "stop.ps1"
-        res = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps_script)])
-    else:
-        sh_script = ROOT_DIR / "stop.sh"
-        res = subprocess.run(["bash", str(sh_script)])
-    # [SAFETY] Auto-Backup: snapshot token moi nhat sau khi proxy da dung han.
-    run_auth_backup_hook("backup")
-    return 0 if res.returncode == 0 else res.returncode
+    return stop_proxy()
 
 def cmd_restart() -> int:
-    stop_code = cmd_stop()
-    if stop_code != 0:
-        return stop_code
-    import time
-    time.sleep(1)
-    return cmd_start()
+    return restart_proxy()
+
 
 def cmd_status() -> int:
     print("=" * 65)

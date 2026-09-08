@@ -27,8 +27,9 @@ if (Get-Command python3 -ErrorAction SilentlyContinue) {
 }
 
 $ModelsCachePath = Join-Path $CodexDir "models_cache.json"
-$ConfigScript = Join-Path $ScriptDir "scripts\configure_codex_toml.py"
-$SyncScript = Join-Path $ScriptDir "scripts\sync_sessions.py"
+$ConfigScript = if ($IsTestMode -and $env:AIC_CONFIG_SCRIPT) { $env:AIC_CONFIG_SCRIPT } else { Join-Path $ScriptDir "scripts\configure_codex_toml.py" }
+$SyncScript = if ($IsTestMode -and $env:AIC_SYNC_SCRIPT) { $env:AIC_SYNC_SCRIPT } else { Join-Path $ScriptDir "scripts\sync_sessions.py" }
+$CheckCodexScript = if ($IsTestMode -and $env:AIC_CHECK_CODEX_SCRIPT) { $env:AIC_CHECK_CODEX_SCRIPT } else { Join-Path $ScriptDir "scripts\check_codex_running.py" }
 $BinDir = (Resolve-Path (Join-Path $ScriptDir "bin") -ErrorAction SilentlyContinue).Path
 if (-not $BinDir) { $BinDir = Join-Path $ScriptDir "bin" }
 
@@ -41,6 +42,17 @@ if (-not (Test-Path $SyncScript)) {
     Write-Error "Thieu helper bat buoc tai $SyncScript"
     exit 1
 }
+if (-not (Test-Path $CheckCodexScript)) {
+    Write-Error "Thieu helper bat buoc tai $CheckCodexScript"
+    exit 1
+}
+
+# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
+& $PythonExe -B $CheckCodexScript
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 
 Write-Host "`n=== Khoi phuc cai dat goc OpenAI Codex CLI ===" -ForegroundColor Cyan
 
@@ -119,17 +131,17 @@ if ($UserPathFile) {
 }
 
 if (Test-Path $ProfilePath) {
-    $pContent = Get-Content $ProfilePath -Raw
-    if ($pContent -match '(?s)# >>> AIC >>>.*?# <<< AIC <<<') {
-        $cleaned = $pContent -replace '(?s)\r?\n?# >>> AIC >>>.*?# <<< AIC <<<', ''
-        Set-Content -Path $ProfilePath -Value $cleaned.Trim() -Encoding utf8
-        Write-Host "-> Da go block 'aic' khoi PowerShell Profile." -ForegroundColor Green
-    } elseif ($pContent -match '(?m)^\s*function\s+global:aic\s*\{.*aic\.py.*\}') {
-        $cleaned = $pContent -replace '(?m)^\s*function\s+global:aic\s*\{.*aic\.py.*\}\r?\n?', ''
-        Set-Content -Path $ProfilePath -Value $cleaned.Trim() -Encoding utf8
-        Write-Host "-> Da go ham legacy 'aic' khoi PowerShell Profile." -ForegroundColor Green
+    $ManageProfile = Join-Path $ScriptDir "scripts\manage_profile.py"
+    & $PythonExe $ManageProfile --profile "$ProfilePath" --action uninstall
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Go bo block 'aic' khoi PowerShell Profile that bai."
+        exit $LASTEXITCODE
     }
+    Write-Host "-> Da go block 'aic' khoi PowerShell Profile." -ForegroundColor Green
 }
+$ProfileStateFile = Join-Path $CodexDir "aic_profile_rollback.json"
+if (Test-Path $ProfileStateFile) { Remove-Item -Path $ProfileStateFile -Force -ErrorAction SilentlyContinue }
+
 
 # 7. Don dep thu muc aic-backup
 & $PythonExe $ConfigScript clean-backup | Out-Null

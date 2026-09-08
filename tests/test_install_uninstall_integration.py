@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import sqlite3
@@ -6,9 +6,59 @@ import tempfile
 import shutil
 import subprocess
 import argparse
+import hashlib
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def snapshot_dir(dir_path: Path):
+    if not dir_path.exists():
+        return None
+    snapshot = {}
+    for p in dir_path.rglob("*"):
+        if p.is_file():
+            rel = str(p.relative_to(dir_path))
+            try:
+                snapshot[rel] = (p.stat().st_size, hashlib.sha256(p.read_bytes()).hexdigest())
+            except Exception:
+                pass
+    return snapshot
+
+
+def verify_dir_unchanged(dir_path: Path, before_snapshot):
+    after_snapshot = snapshot_dir(dir_path)
+    assert before_snapshot == after_snapshot, f"Directory {dir_path} was unexpectedly modified during test run!"
+
+def create_isolated_fixture(target_dir: Path):
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # 1. Root files needed by installer/uninstaller
+    for f in ["install.ps1", "install.sh", "uninstall.ps1", "uninstall.sh", "VERSION", "config.example.yaml"]:
+        src = ROOT_DIR / f
+        if src.exists():
+            shutil.copy2(src, target_dir / f)
+
+    # 2. docs/
+    docs_dir = target_dir / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    tpl = ROOT_DIR / "docs" / "models_cache_template.json"
+    if tpl.exists():
+        shutil.copy2(tpl, docs_dir / "models_cache_template.json")
+
+    # 3. bin/
+    bin_dir = target_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for b in (ROOT_DIR / "bin").glob("*"):
+        if b.is_file():
+            shutil.copy2(b, bin_dir / b.name)
+
+    # 4. scripts/
+    scripts_dir = target_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    for s in (ROOT_DIR / "scripts").glob("*.py"):
+        if s.is_file():
+            shutil.copy2(s, scripts_dir / s.name)
+
 
 def setup_integration_env(target_provider="openai", with_bom=False, with_lf=True, absent_config=False, custom_sections=True):
     tmp_root = Path(tempfile.mkdtemp(prefix="aic_int_test_"))
@@ -60,32 +110,58 @@ def setup_integration_env(target_provider="openai", with_bom=False, with_lf=True
     bin_link_dir = tmp_root / "local_bin"
     bin_link_dir.mkdir(parents=True, exist_ok=True)
     
+    # 5. Isolated Auths
+    fake_auths = tmp_root / "auths"
+    fake_auths.mkdir(parents=True, exist_ok=True)
+    fake_auths_backup = tmp_root / "auths_backup"
+    fake_auths_backup.mkdir(parents=True, exist_ok=True)
+
+    # 6. Isolated Repo Fixture
+    fixture_dir = tmp_root / "repo_fixture"
+    create_isolated_fixture(fixture_dir)
+
     env = os.environ.copy()
     env["AIC_TEST_MODE"] = "1"
     env["AIC_CODEX_DIR"] = str(codex_dir)
+    env["AIC_AUTHS_DIR"] = str(fake_auths)
+    env["AIC_AUTHS_BACKUP_DIR"] = str(fake_auths_backup)
     env["AIC_PROFILE_PATH"] = str(profile_path)
     env["AIC_USER_PATH_FILE"] = str(user_path_file)
     env["AIC_BIN_LINK_DIR"] = str(bin_link_dir)
     env["AIC_SKIP_DOWNLOAD"] = "1"
     env["AIC_SKIP_PROXY"] = "1"
+    env["AIC_FIXTURE_DIR"] = str(fixture_dir)
     
     return tmp_root, codex_dir, config_path, raw_config_bytes, profile_path, user_path_file, bin_link_dir, env
 
 
 def run_ps1(script_name, env):
-    script_path = ROOT_DIR / script_name
+    script_dir = Path(env.get("AIC_FIXTURE_DIR", ROOT_DIR))
+    script_path = script_dir / script_name
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)]
     return subprocess.run(cmd, env=env, capture_output=True, text=True)
 
 
 def run_sh(script_name, env):
-    script_path = ROOT_DIR / script_name
+    env = env.copy()
+    script_dir = Path(env.get("AIC_FIXTURE_DIR", ROOT_DIR))
+    script_path = script_dir / script_name
     bash_bin = "bash"
     if sys.platform == "win32":
         git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
         if git_bash.exists():
             bash_bin = str(git_bash)
-    cmd = [bash_bin, str(script_path)]
+            # Use Git's own Unix tools instead of unrelated Anaconda/MSYS tools.
+            git_tools = git_bash.parent.parent / "usr" / "bin"
+            env["PATH"] = str(git_tools) + os.pathsep + env.get("PATH", "")
+        # Forward-slash drive paths work with both Git tools and native Python.
+        for key in ("AIC_CODEX_DIR", "AIC_PROFILE_PATH", "AIC_USER_PATH_FILE",
+                    "AIC_BIN_LINK_DIR", "AIC_AUTHS_DIR", "AIC_AUTHS_BACKUP_DIR",
+                    "AIC_FIXTURE_DIR", "AIC_CONFIG_SCRIPT", "AIC_SYNC_SCRIPT",
+                    "AIC_CHECK_CODEX_SCRIPT"):
+            if key in env:
+                env[key] = env[key].replace("\\", "/")
+    cmd = [bash_bin, str(script_path).replace("\\", "/")]
     return subprocess.run(cmd, env=env, capture_output=True, text=True)
 
 
@@ -99,7 +175,11 @@ def run_integration_tests(platform="windows"):
     run_uninstall = (lambda env: run_ps1("uninstall.ps1", env)) if is_win else (lambda env: run_sh("uninstall.sh", env))
     
     passed = 0
-    total = 15
+    total = 17
+
+    auths_snapshot = snapshot_dir(ROOT_DIR / "auths")
+    backup_snapshot = snapshot_dir(ROOT_DIR / "auths_backup")
+    disabled_snapshot = snapshot_dir(ROOT_DIR / "auths_disabled")
 
     # Case 1: Windows/Unix install & uninstall success with LF & sections
     print("Case 1: Full Install & Uninstall success with LF, profiles, projects, mcp...")
@@ -107,6 +187,13 @@ def run_integration_tests(platform="windows"):
     try:
         r_inst = run_install(env)
         assert r_inst.returncode == 0, f"Install failed with output: {r_inst.stderr}\n{r_inst.stdout}"
+
+        # Verify auths isolation: zen auth in AIC_AUTHS_DIR, zero mutation in fixture/auths
+        fixture_dir = Path(env["AIC_FIXTURE_DIR"])
+        fake_auths = Path(env["AIC_AUTHS_DIR"])
+        assert (fake_auths / "openai-compatible-opencode-zen.json").exists(), "Zen auth must be created in AIC_AUTHS_DIR"
+        assert not (fixture_dir / "auths").exists(), "fixture/auths must not be created or mutated"
+        assert not (fixture_dir / "auths_backup").exists(), "fixture/auths_backup must not be created"
         
         # Verify custom
         sync_verify = subprocess.run([sys.executable, str(ROOT_DIR / "scripts" / "sync_sessions.py"), "--verify", "custom"], env=env, capture_output=True)
@@ -290,17 +377,11 @@ def run_integration_tests(platform="windows"):
     print("Case 12: Missing helper script aborts in preflight before mutation...")
     tmp_root, codex_dir, config_path, raw_orig, prof, upath, _, env = setup_integration_env()
     try:
-        # Move sync_sessions temporarily or pass non-existent path
-        sync_script = ROOT_DIR / "scripts" / "sync_sessions.py"
-        sync_bak = ROOT_DIR / "scripts" / "sync_sessions.py.tmpbak"
-        sync_script.rename(sync_bak)
-        try:
-            r = run_install(env)
-            assert r.returncode != 0
-            assert config_path.read_bytes() == raw_orig
-        finally:
-            if sync_bak.exists():
-                sync_bak.rename(sync_script)
+        # Pass non-existent path via test env var
+        env["AIC_SYNC_SCRIPT"] = str(tmp_root / "nonexistent_sync_sessions.py")
+        r = run_install(env)
+        assert r.returncode != 0
+        assert config_path.read_bytes() == raw_orig
         print("  -> [PASS]")
         passed += 1
     finally:
@@ -384,6 +465,86 @@ def run_integration_tests(platform="windows"):
         passed += 1
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
+
+    # Case 16: Test-only script overrides strictly ignored in production mode
+    print("Case 16: Test-only script overrides strictly ignored in production mode...")
+    tmp_root, codex_dir, config_path, raw_orig, prof, upath, _, env = setup_integration_env()
+    try:
+        mock_bin = tmp_root / "mock_bin"
+        mock_bin.mkdir(parents=True, exist_ok=True)
+        if is_win:
+            (mock_bin / "python3.bat").write_text("@echo off\r\necho MOCK_PY: %* 1>&2\r\nexit /b 99\r\n", encoding="utf-8")
+            (mock_bin / "python.bat").write_text("@echo off\r\necho MOCK_PY: %* 1>&2\r\nexit /b 99\r\n", encoding="utf-8")
+            path_sep = ";"
+        else:
+            for p in ["python3", "python"]:
+                f = mock_bin / p
+                f.write_text('#!/bin/sh\necho "MOCK_PY: $@" >&2\nexit 99\n', encoding="utf-8")
+                f.chmod(0o755)
+            path_sep = os.pathsep
+
+        prod_env = env.copy()
+        prod_env["AIC_TEST_MODE"] = "0"
+        prod_env["PATH"] = str(mock_bin) + path_sep + prod_env.get("PATH", "")
+        prod_env["AIC_CONFIG_SCRIPT"] = str(tmp_root / "nonexistent_config.py")
+        prod_env["AIC_SYNC_SCRIPT"] = str(tmp_root / "nonexistent_sync.py")
+        prod_env["AIC_CHECK_CODEX_SCRIPT"] = str(tmp_root / "nonexistent_check.py")
+
+        r_inst = run_install(prod_env)
+        combined_inst = r_inst.stderr + r_inst.stdout
+        assert "Thieu helper bat buoc tai" not in combined_inst, "Overrides must be ignored in production mode!"
+        assert "MOCK_PY:" in combined_inst
+        assert "check_codex_running.py" in combined_inst
+        assert "nonexistent_check.py" not in combined_inst
+        assert r_inst.returncode == 99
+
+        r_uninst = run_uninstall(prod_env)
+        combined_uninst = r_uninst.stderr + r_uninst.stdout
+        assert "Thieu helper bat buoc tai" not in combined_uninst, "Overrides must be ignored in production mode!"
+        assert "MOCK_PY:" in combined_uninst
+        assert "check_codex_running.py" in combined_uninst
+        assert "nonexistent_check.py" not in combined_uninst
+        assert r_uninst.returncode == 99
+
+        print("  -> [PASS]")
+        passed += 1
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    # Case 17: Fail-closed: missing AIC_AUTHS_DIR or AIC_AUTHS_BACKUP_DIR in test mode halts in preflight
+    print("Case 17: Fail-closed: missing AIC_AUTHS_DIR or AIC_AUTHS_BACKUP_DIR in test mode halts in preflight...")
+    tmp_root, codex_dir, config_path, raw_orig, prof, upath, _, env = setup_integration_env()
+    try:
+        fake_auths = Path(env["AIC_AUTHS_DIR"])
+
+        # 17a: Missing AIC_AUTHS_DIR
+        env_missing_auths = env.copy()
+        del env_missing_auths["AIC_AUTHS_DIR"]
+        r = run_install(env_missing_auths)
+        assert r.returncode != 0, "Installer must fail if AIC_AUTHS_DIR is missing in test mode"
+        assert "AIC_TEST_MODE=1 requires AIC_AUTHS_DIR" in (r.stderr + r.stdout)
+        assert len(list(fake_auths.glob("*"))) == 0, "No files should be written on preflight abort"
+        assert not (codex_dir / "aic-backup").exists()
+
+        # 17b: Missing AIC_AUTHS_BACKUP_DIR
+        env_missing_backup = env.copy()
+        del env_missing_backup["AIC_AUTHS_BACKUP_DIR"]
+        r = run_install(env_missing_backup)
+        assert r.returncode != 0, "Installer must fail if AIC_AUTHS_BACKUP_DIR is missing in test mode"
+        assert "AIC_TEST_MODE=1 requires AIC_AUTHS_DIR" in (r.stderr + r.stdout)
+        assert len(list(fake_auths.glob("*"))) == 0
+        assert not (codex_dir / "aic-backup").exists()
+
+        print("  -> [PASS]")
+        passed += 1
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+    print("Verifying real auths/auths_backup directory integrity...")
+    verify_dir_unchanged(ROOT_DIR / "auths", auths_snapshot)
+    verify_dir_unchanged(ROOT_DIR / "auths_backup", backup_snapshot)
+    verify_dir_unchanged(ROOT_DIR / "auths_disabled", disabled_snapshot)
+    print("  -> Auths integrity verified (0 bytes changed in real auths)")
 
     print("\n" + "=" * 70)
     print(f"INTEGRATION TEST SUMMARY: {passed}/{total} passed (100% Green)")

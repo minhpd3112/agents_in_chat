@@ -14,6 +14,7 @@ def test_check_updates():
     assert parse_semver("0.153.0") == (0, 153, 0)
     assert is_newer("1.2.0", "1.1.0") is True
     assert is_newer("1.1.1", "1.1.0") is True
+    assert is_newer("1.1.2", "1.1.1") is True
     assert is_newer("1.1.0", "1.1.0") is False
     assert is_newer("1.0.9", "1.1.0") is False
     assert is_newer("2.0.0", "1.99.99") is True
@@ -23,7 +24,7 @@ def test_check_updates():
 
     # 3. Local version reading
     local_ver = get_local_version()
-    assert local_ver == "1.1.1"
+    assert local_ver == "1.1.2"
 
     # 4. Cache read/write in isolated directory
     with tempfile.TemporaryDirectory() as tmp_dir:

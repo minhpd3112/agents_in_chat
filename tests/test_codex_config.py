@@ -1,7 +1,25 @@
-import os, sys
+import os, sys, re
+from pathlib import Path
+
+def get_port():
+    if os.environ.get("AIC_PORT"):
+        try:
+            return int(os.environ["AIC_PORT"])
+        except ValueError:
+            pass
+    cfg = Path(__file__).resolve().parent.parent / "config.yaml"
+    if cfg.exists():
+        try:
+            m = re.search(r"^port:\s*(\d+)", cfg.read_text(encoding="utf-8"), re.MULTILINE)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+    return 8090
 
 def test_codex_config():
-    config_path = os.path.expanduser("~/.codex/config.toml")
+    codex_dir = os.environ.get("AIC_CODEX_DIR") or os.environ.get("CODEX_DIR") or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    config_path = os.path.join(codex_dir, "config.toml")
     if not os.path.exists(config_path):
         return False, f"File {config_path} does not exist!"
     
@@ -14,8 +32,10 @@ def test_codex_config():
     if "[model_providers.custom]" not in content:
         return False, "[model_providers.custom] section is missing"
     
-    if "http://127.0.0.1:8080/v1" not in content:
-        return False, "base_url does not point to http://127.0.0.1:8080/v1"
+    port = get_port()
+    expected_url = f"http://127.0.0.1:{port}/v1"
+    if expected_url not in content:
+        return False, f"base_url does not point to {expected_url}"
     
     return True, "Codex config.toml is properly configured to use CLIProxyAPI."
 

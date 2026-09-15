@@ -45,10 +45,22 @@ def get_config_path() -> Path:
 
 
 def get_proxy_port() -> int:
-    try:
-        return int(os.environ.get("AIC_PORT", 8080))
-    except (ValueError, TypeError):
-        return 8080
+    env_port = os.environ.get("AIC_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except (ValueError, TypeError):
+            pass
+    config_file = get_config_path()
+    if config_file.exists():
+        try:
+            import re
+            m = re.search(r"^port:\s*(\d+)", config_file.read_text(encoding="utf-8"), re.MULTILINE)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+    return 8090
 
 
 _last_stop_backup_failed = False
@@ -255,7 +267,9 @@ def is_process_alive(pid: int) -> bool:
     return status in ("ok", "permission_denied")
 
 
-def is_port_in_use(port: int = 8080, host: str = "127.0.0.1") -> bool:
+def is_port_in_use(port: Optional[int] = None, host: str = "127.0.0.1") -> bool:
+    if port is None:
+        port = get_proxy_port()
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind((host, port))
@@ -264,7 +278,9 @@ def is_port_in_use(port: int = 8080, host: str = "127.0.0.1") -> bool:
         return True
 
 
-def check_proxy_health(port: int = 8080) -> Tuple[bool, list]:
+def check_proxy_health(port: Optional[int] = None) -> Tuple[bool, list]:
+    if port is None:
+        port = get_proxy_port()
     try:
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/models",
@@ -400,7 +416,7 @@ def adopt_running_proxy() -> Optional[Tuple[int, Optional[str]]]:
 
     if sys.platform == "win32":
         try:
-            ps_cmd = f"Get-CimInstance Win32_Process -Filter \\\"Name = '{expected_exe.name}'\\\" | Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress"
+            ps_cmd = f"Get-CimInstance Win32_Process -Filter \"Name = '{expected_exe.name}'\" | Select-Object ProcessId, ExecutablePath, CommandLine | ConvertTo-Json -Compress"
             cmd = ["powershell", "-NoProfile", "-Command", ps_cmd]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
             if res.returncode == 0 and res.stdout.strip():
@@ -685,7 +701,7 @@ def start_proxy() -> int:
         return 1
 
     time.sleep(1)
-    for _ in range(8):
+    for _ in range(25):
         if not is_process_alive(proc.pid):
             remove_state()
             error(f"proxy process PID {proc.pid} exited prematurely")

@@ -1,6 +1,6 @@
 # CLIProxyAPI Configuration - Dual Provider Pool (OpenAI + Antigravity)
 host: "127.0.0.1"
-port: 8080
+port: 8090
 
 auth-dir: "./auths"
 api-keys: []

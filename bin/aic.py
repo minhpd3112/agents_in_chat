@@ -25,7 +25,7 @@ CODEX_DIR = Path(os.path.expanduser("~/.codex"))
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 from log_utils import error, info, warn  # noqa: E402
 from check_updates import get_local_version, check_for_update, prompt_update_if_available, run_update  # noqa: E402
-from proxy_manager import start_proxy, stop_proxy, restart_proxy, check_proxy_health  # noqa: E402
+from proxy_manager import start_proxy, stop_proxy, restart_proxy, check_proxy_health, get_proxy_port  # noqa: E402
 
 VERSION = get_local_version()
 
@@ -68,13 +68,14 @@ def cmd_status() -> int:
     auth_count = len(list(auths_dir.glob("*.json"))) if auths_dir.exists() else 0
 
     # 1. Proxy
-    online, models = check_proxy_health()
+    port = get_proxy_port()
+    online, models = check_proxy_health(port)
     if online:
         models_str = ", ".join(models)
-        print(f"[OK] Proxy Service (127.0.0.1:8080) : ONLINE [200 OK]")
+        print(f"[OK] Proxy Service (127.0.0.1:{port}) : ONLINE [200 OK]")
         print(f"     -> Models Online ({len(models)}): {models_str}")
     else:
-        print(f"[OFFLINE] Proxy Service (127.0.0.1:8080) : OFFLINE")
+        print(f"[OFFLINE] Proxy Service (127.0.0.1:{port}) : OFFLINE")
 
     # 2. Config Provider
     config_file = CODEX_DIR / "config.toml"
@@ -275,7 +276,7 @@ def build_help_text():
 Su dung: aic <lenh> [tuy chon]
 
 Cac lenh kha dung:
-  aic start       - Khoi dong Proxy API chay ngam tren cong 8080
+  aic start       - Khoi dong Proxy API chay ngam tren cong {get_proxy_port()}
   aic stop        - Tat Proxy API va giai phong RAM tai nguyen
   aic restart     - Khoi dong lai Proxy API Service
   aic status      - Kiem tra tinh trang he thong (Proxy, Provider, Cache)

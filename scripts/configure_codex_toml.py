@@ -142,6 +142,24 @@ def split_toml_sections(text: str) -> tuple[str, list[tuple[str, str]]]:
     return top_level, sections
 
 
+def get_proxy_port() -> int:
+    env_port = os.environ.get("AIC_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except (ValueError, TypeError):
+            pass
+    config_yaml = Path(__file__).resolve().parent.parent / "config.yaml"
+    if config_yaml.exists():
+        try:
+            m = re.search(r"^port:\s*(\d+)", config_yaml.read_text(encoding="utf-8"), re.MULTILINE)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+    return 8090
+
+
 def configure_custom(codex_dir: Path) -> int:
     # 1. Ensure initial backup exists before modifying; abort if backup is invalid
     if not ensure_backup(codex_dir):
@@ -176,10 +194,11 @@ def configure_custom(codex_dir: Path) -> int:
             lines.append(l)
 
     # Build custom provider block
+    port = get_proxy_port()
     custom_provider_block = (
         '[model_providers.custom]\n'
         'name = "Custom Quota Pool"\n'
-        'base_url = "http://127.0.0.1:8080/v1"\n'
+        f'base_url = "http://127.0.0.1:{port}/v1"\n'
         'wire_api = "responses"'
     )
 

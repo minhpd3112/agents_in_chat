@@ -1,7 +1,7 @@
 import sys, os, time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_proxy_health import test_proxy_health
+from test_proxy_health import test_proxy_health, get_port
 from test_config_yaml import test_config_yaml
 from test_models_cache import test_models_cache
 from test_codex_config import test_codex_config
@@ -13,7 +13,7 @@ from test_claude_tool_calling import test_claude_tool_calling
 from test_check_updates import test_check_updates
 
 SUITES = [
-    ("1. Proxy Health & Endpoint (http://127.0.0.1:8080)", test_proxy_health),
+    (f"1. Proxy Health & Endpoint (http://127.0.0.1:{get_port()})", test_proxy_health),
     ("2. Config YAML (Routing, Retries & Aliases)", test_config_yaml),
     ("3. Models Cache (BOM Check, TTL 2099 & Tool Specs)", test_models_cache),
     ("4. Codex config.toml Integrity", test_codex_config),

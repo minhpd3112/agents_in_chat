@@ -567,7 +567,7 @@ def run_integration_tests(platform="windows"):
         r1 = run_install(env)
         assert r1.returncode == 0, f"Initial install must succeed, got {r1.returncode}"
         installed_config = config_path.read_bytes()
-        assert b"http://127.0.0.1:8080/v1" in installed_config, "config must point to AIC proxy"
+        assert b"http://127.0.0.1:" in installed_config and b"/v1" in installed_config, "config must point to AIC proxy"
         cache_file = codex_dir / "models_cache.json"
         assert cache_file.exists(), "models_cache.json must exist after first install"
         installed_cache = cache_file.read_bytes()

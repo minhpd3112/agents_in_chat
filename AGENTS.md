@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-- AIC ("Agents in Chat"): multi-account OAuth quota pool behind a local reverse proxy (`cli-proxy-api`, prebuilt binary at repo root, port 127.0.0.1:8080) that OpenAI Codex CLI points at via `~/.codex/config.toml` (`base_url = http://127.0.0.1:8080/v1`, `wire_api = "responses"`).
+- AIC ("Agents in Chat"): multi-account OAuth quota pool behind a local reverse proxy (`cli-proxy-api`, prebuilt binary at repo root, port 127.0.0.1:8090) that OpenAI Codex CLI points at via `~/.codex/config.toml` (`base_url = http://127.0.0.1:8090/v1`, `wire_api = "responses"`).
 - Not a buildable app: Python >=3.8 **stdlib-only** scripts + PowerShell/bash installers wrapped around the vendored binary. The binary is gitignored — never commit or attempt to rebuild it.
 - Before debugging proxy/session issues, check `docs/KIEN_TRUC_VA_XU_LY_LOI.md` — it documents ~17 known failure modes and their fixes.
 

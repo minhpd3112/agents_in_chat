@@ -1,7 +1,25 @@
-import urllib.request, json, sys
+import urllib.request, json, sys, os, re
+from pathlib import Path
+
+def get_port():
+    if os.environ.get("AIC_PORT"):
+        try:
+            return int(os.environ["AIC_PORT"])
+        except ValueError:
+            pass
+    cfg = Path(__file__).resolve().parent.parent / "config.yaml"
+    if cfg.exists():
+        try:
+            m = re.search(r"^port:\s*(\d+)", cfg.read_text(encoding="utf-8"), re.MULTILINE)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+    return 8090
 
 def test_proxy_health():
-    url = "http://127.0.0.1:8080/v1/models"
+    port = get_port()
+    url = f"http://127.0.0.1:{port}/v1/models"
     try:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=5) as resp:

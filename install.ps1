@@ -186,7 +186,7 @@ try {
         throw "Khong tim thay template tai $TemplateJson!"
     }
     if (Test-Path $ModelsCachePath) {
-        Set-ItemProperty -Path $ModelsCachePath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+        [System.IO.File]::SetAttributes($ModelsCachePath, [System.IO.FileAttributes]::Normal)
     }
 
     # Tu dong nhan dien phien ban Codex CLI hien tai de dong bo client_version, mac dinh lay tu template
@@ -201,7 +201,7 @@ try {
     $TemplateData.client_version = $CodexVer
     $JsonContent = $TemplateData | ConvertTo-Json -Depth 30
     [IO.File]::WriteAllText($ModelsCachePath, $JsonContent, (New-Object System.Text.UTF8Encoding($false)))
-    Set-ItemProperty -Path $ModelsCachePath -Name IsReadOnly -Value $true
+    [System.IO.File]::SetAttributes($ModelsCachePath, [System.IO.FileAttributes]::ReadOnly)
     $State_CacheModified = $true
 
     $ZenAuthPath = Join-Path $AuthsDir "openai-compatible-opencode-zen.json"

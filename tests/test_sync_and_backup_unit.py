@@ -50,7 +50,7 @@ def run_all_unit_tests() -> bool:
     print("=" * 70)
 
     tests_passed = 0
-    total_tests = 15
+    total_tests = 16
 
     # Test 1: Invalid provider
     print("Test 1: Invalid provider returns 2 and modifies 0 files...")
@@ -371,6 +371,64 @@ def run_all_unit_tests() -> bool:
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    # Test 16: Lineage Re-alignment for Forked sessions
+    print("Test 16: Re-align forked lineage cutoff offset when ancestor rollout shrinks during sanitization...")
+    tmp_dir, _, _ = setup_temp_codex_fixture("custom")
+    try:
+        sessions_dir = tmp_dir / "sessions" / "2026-08"
+        parent_file = sessions_dir / "parent.jsonl"
+        with open(parent_file, "w", encoding="utf-8") as f:
+            p_meta = {"type": "session_meta", "payload": {"id": "p1", "session_id": "p1", "model_provider": "custom"}}
+            f.write(json.dumps(p_meta) + "\n")
+            f.write(json.dumps({"type": "message", "ordinal": 1, "role": "user", "content": "Question"}) + "\n")
+            f.write(json.dumps({"type": "response_item", "ordinal": 2, "payload": {"type": "reasoning", "encrypted_content": "cpa-gemini-carrier-payload-that-takes-bytes"}}) + "\n")
+            f.write(json.dumps({"type": "response_item", "ordinal": 3, "payload": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "Answer"}]}}) + "\n")
+
+        old_parent_size = os.path.getsize(parent_file)
+
+        # Create child forked from parent at the end of parent
+        child_file = sessions_dir / "child.jsonl"
+        with open(child_file, "w", encoding="utf-8") as f:
+            c_meta = {
+                "type": "session_meta",
+                "payload": {
+                    "id": "c1",
+                    "session_id": "c1",
+                    "model_provider": "custom",
+                    "history_base": {
+                        "thread_id": "p1",
+                        "end_ordinal_exclusive": 4,
+                        "end_byte_offset": old_parent_size
+                    }
+                }
+            }
+            f.write(json.dumps(c_meta) + "\n")
+            f.write(json.dumps({"type": "message", "ordinal": 4, "role": "user", "content": "Child follow-up"}) + "\n")
+
+        # Sync to openai: parent should lose cpa- carrier lines and shrink
+        code = sync_provider("openai", tmp_dir)
+        assert code == 0, f"Expected 0, got {code}"
+
+        new_parent_size = os.path.getsize(parent_file)
+        assert new_parent_size < old_parent_size, "Parent should have shrunk after dropping cpa- carrier"
+
+        with open(child_file, "r", encoding="utf-8") as f:
+            c_lines = f.readlines()
+        c_meta_new = json.loads(c_lines[0])
+        new_cutoff = c_meta_new["payload"]["history_base"]["end_byte_offset"]
+
+        assert new_cutoff == new_parent_size, f"Child cutoff ({new_cutoff}) must match new parent size ({new_parent_size})"
+        assert new_cutoff <= new_parent_size, "Cutoff must not be past source rollout"
+
+        # Verification must pass with zero issues
+        verify_code = verify_provider("openai", tmp_dir)
+        assert verify_code == 0, f"Verification failed with code {verify_code}"
+
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
     print("\n" + "=" * 70)
     print(f"OFFLINE UNIT TESTS SUMMARY: {tests_passed}/{total_tests} passed (100% Green)")
     print("=" * 70)
@@ -380,7 +438,7 @@ def run_all_unit_tests() -> bool:
 def test_sync_and_backup_unit():
     ok = run_all_unit_tests()
     if ok:
-        return True, "15/15 offline unit tests passed (Session Sync, Carrier Sanitizer, Atomic Mock, BOM/LF & Backup/Restore)."
+        return True, "16/16 offline unit tests passed (Session Sync, Carrier Sanitizer, Lineage Re-align, Atomic Mock, BOM/LF & Backup/Restore)."
     else:
         return False, "Offline unit tests failed."
 

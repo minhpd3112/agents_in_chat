@@ -322,3 +322,47 @@ sandbox = "elevated"
 * **Giải pháp khắc phục:**
   * Loại bỏ toàn bộ các dòng alias fallback bẻ lái `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` sang Claude Sonnet trong `config.yaml`.
   * Mở khóa các mô hình GPT-5.6 khỏi danh sách `oauth-excluded-models.codex` để toàn bộ request Sol/Terra/Luna được định tuyến 100% về tài khoản OpenAI Codex OAuth thật.
+
+---
+
+### 21. Sự Cố "Lineage Drift" Lệch Byte Offset Sau Khi Gọt Tỉa Reasoning (`invalid paginated history lineage: cutoff byte offset is past the source rollout`)
+* **Hiện tượng:**
+  * Người dùng mở lại (Resume) một phiên chat đã từng được rẽ nhánh (**Fork**) sau khi chạy `aic uninstall` (hoặc `sync_sessions.py openai`), giao diện Codex CLI hiện thông báo lỗi đỏ:
+    `Failed to resume chat: invalid paginated history lineage for <thread_id>: cutoff byte offset is past the source rollout`.
+* **Phân tích mã nguồn lõi của Codex CLI (`codex-rs`):**
+  1. *Kiểm tra biên cắt trong [`rollout_lineage.rs:261-294`](file:///E:/AI/agents_in_chat/ma_nguon_tham_khao/codex-repo/codex-rs/thread-store/src/local/rollout_lineage.rs):*
+     ```rust
+     async fn validate_cutoff_bounds(
+         requested_thread_id: ThreadId,
+         rollout_path: &Path,
+         end: &HistoryPosition,
+     ) -> ThreadStoreResult<()> { ... }
+     ```
+  2. *Kiểm tra kích thước file trong [`seekable_reader.rs:87-89`](file:///E:/AI/agents_in_chat/ma_nguon_tham_khao/codex-repo/codex-rs/rollout/src/seekable_reader.rs):*
+     ```rust
+     pub fn rollout_contains_prefix(path: &Path, end_byte_offset: u64) -> io::Result<bool> {
+         match RolloutReader::open(path)? {
+             RolloutReader::Plain(file) => Ok(end_byte_offset <= file.metadata()?.len()),
+             ...
+         }
+     }
+     ```
+     Codex CLI bắt buộc `end_byte_offset` (điểm cắt mà phiên con rẽ nhánh từ phiên cha) phải luôn **nhỏ hơn hoặc bằng độ dài thực tế của file phiên cha** (`file.metadata()?.len()`).
+* **Bản chất kỹ thuật & Nguyên nhân gốc:**
+  1. Khi người dùng chat qua AIC Proxy với các mô hình Antigravity (Gemini/Claude), proxy sinh ra các khối reasoning tổng hợp `cpa-*` (Encrypted Reasoning Carrier).
+  2. Khi chuyển về provider `openai` (`aic uninstall`), `sync_sessions.py` bắt buộc phải loại bỏ các dòng `cpa-*` để OpenAI API không trả về lỗi HTTP 400 `invalid_encrypted_content`.
+  3. Việc loại bỏ các dòng này làm file phiên cha co lại (giảm từ vài KB đến vài chục KB tùy số lượng turn).
+  4. Trước đây, `sync_sessions.py` chỉ sửa độc lập file cha mà không rà soát lại các phiên con đã fork từ phiên cha đó. Dòng 1 metadata của phiên con vẫn lưu tĩnh `end_byte_offset` trỏ vào độ dài cũ của file cha.
+  5. Khi resume phiên con, Codex CLI so sánh thấy `end_byte_offset (cũ) > độ_dài_file_cha (mới)` nên lập tức từ chối tải và báo lỗi hỏng chuỗi lineage.
+* **Giải pháp tự động hóa toàn diện trong AIC:**
+  1. *Cơ chế Re-align Lineage tự động ([`scripts/sync_sessions.py`](file:///E:/AI/agents_in_chat/scripts/sync_sessions.py)):*
+     * Bổ sung hàm `realign_forked_lineages`: Sau khi lọc xong các file, script tự động quét tìm tất cả các file có trường `history_base`.
+     * Nếu phát hiện `history_base.end_byte_offset > parent_file_size`, hàm `find_ordinal_byte_offset` sẽ dò lại chính xác vị trí byte kết thúc của `end_ordinal_exclusive` trong file cha mới (hoặc gán bằng dung lượng mới của file cha nếu rẽ nhánh ở cuối file).
+     * Ghi đè nguyên tử dòng metadata 1 của phiên con bằng temporary file + `os.replace()`.
+  2. *Cơ chế xóa Cache với Lock Retry (`clear_history_projection_cache`):*
+     * Kết nối `thread_history_1.sqlite` với timeout 5.0 giây và cơ chế thử lại 3 lần nhằm phòng tránh xung đột khóa file (file lock) khi tiến trình `codex.exe` đang chạy nền trên Windows.
+  3. *Tích hợp kiểm tra toàn vẹn trong `verify_provider`:*
+     * Chạy 2 pass kiểm tra: pass 1 ghi nhận kích thước tất cả các session, pass 2 đối chiếu toàn bộ `history_base.end_byte_offset <= parent_size`. Bất kỳ trường hợp lệch offset nào đều bị bắt ngay từ bước verify.
+  4. *Bảo đảm chất lượng bằng Unit Test ([`tests/test_sync_and_backup_unit.py`](file:///E:/AI/agents_in_chat/tests/test_sync_and_backup_unit.py)):*
+     * Bổ sung Test 16 mô phỏng chu trình: tạo file cha mang carrier `cpa-` → tạo file con fork từ file cha → chạy `sync_provider("openai")` → xác nhận file cha co lại và file con tự động được re-align `end_byte_offset` khớp 100% với kích thước cha mới, `verify_provider` trả về kết quả hợp lệ tuyệt đối.
+

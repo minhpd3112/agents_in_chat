@@ -28,6 +28,150 @@ def get_codex_dir(custom_path=None) -> Path:
     return Path(os.path.expanduser("~/.codex")).resolve()
 
 
+def find_ordinal_byte_offset(parent_path: str, end_ordinal_exclusive: int) -> int:
+    """Find the byte offset in parent_path where all ordinals < end_ordinal_exclusive end.
+    If the file ends before reaching end_ordinal_exclusive, returns the file's total byte length."""
+    file_size = os.path.getsize(parent_path)
+    if end_ordinal_exclusive <= 0:
+        return 0
+
+    offset = 0
+    matched_offset = file_size
+
+    with open(parent_path, "rb") as pf:
+        for line in pf:
+            line_len = len(line)
+            try:
+                obj = json.loads(line.decode("utf-8"))
+                ord_val = obj.get("ordinal")
+                if ord_val is not None:
+                    if ord_val < end_ordinal_exclusive:
+                        matched_offset = offset + line_len
+                    else:
+                        break
+            except Exception:
+                pass
+            offset += line_len
+
+    return matched_offset
+
+
+def realign_forked_lineages(sessions_dir: Path) -> int:
+    """Scans all session JSONL files and repairs history_base.end_byte_offset
+    if an ancestor rollout shrank due to carrier sanitization.
+    Returns count of realigned sessions."""
+    if not sessions_dir.exists():
+        return 0
+
+    thread_map = {}
+    for root, _, files in os.walk(str(sessions_dir)):
+        for f in files:
+            if f.endswith(".jsonl"):
+                fp = os.path.join(root, f)
+                try:
+                    with open(fp, "r", encoding="utf-8") as sf:
+                        first = sf.readline()
+                    if not first:
+                        continue
+                    meta = json.loads(first)
+                    payload = meta.get("payload", {})
+                    tid = payload.get("id") or payload.get("session_id")
+                    if tid and tid not in thread_map:
+                        thread_map[tid] = fp
+                except Exception:
+                    pass
+
+    realigned_count = 0
+    for root, _, files in os.walk(str(sessions_dir)):
+        for f in files:
+            if f.endswith(".jsonl"):
+                fp = os.path.join(root, f)
+                try:
+                    with open(fp, "r", encoding="utf-8") as sf:
+                        lines = sf.readlines()
+                    if not lines:
+                        continue
+                    meta = json.loads(lines[0])
+                    payload = meta.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    hbase = payload.get("history_base")
+                    if not isinstance(hbase, dict):
+                        continue
+
+                    parent_id = hbase.get("thread_id")
+                    cutoff = hbase.get("end_byte_offset")
+                    end_ord = hbase.get("end_ordinal_exclusive")
+                    if not parent_id or cutoff is None or parent_id not in thread_map:
+                        continue
+
+                    parent_fp = thread_map[parent_id]
+                    parent_size = os.path.getsize(parent_fp)
+
+                    if cutoff > parent_size:
+                        new_cutoff = find_ordinal_byte_offset(parent_fp, end_ord) if end_ord is not None else parent_size
+                        new_cutoff = min(new_cutoff, parent_size)
+                        hbase["end_byte_offset"] = new_cutoff
+                        lines[0] = json.dumps(meta, ensure_ascii=False) + "\n"
+
+                        tmp_path = f"{fp}.tmp.{os.getpid()}_{time.time_ns()}"
+                        try:
+                            with open(tmp_path, "w", encoding="utf-8") as tf:
+                                tf.writelines(lines)
+                                tf.flush()
+                                os.fsync(tf.fileno())
+                            os.replace(tmp_path, fp)
+                        except PermissionError:
+                            with open(fp, "r+", encoding="utf-8") as tf:
+                                tf.seek(0)
+                                tf.writelines(lines)
+                                tf.truncate()
+                                tf.flush()
+                                os.fsync(tf.fileno())
+                        finally:
+                            if os.path.exists(tmp_path):
+                                try:
+                                    os.remove(tmp_path)
+                                except Exception:
+                                    pass
+
+                        realigned_count += 1
+                        info(f"realigned lineage for {f}: cutoff {cutoff} -> {new_cutoff} (parent: {os.path.basename(parent_fp)})")
+                except Exception as e:
+                    info(f"warning: failed to realign lineage in {f}: {e}")
+
+    return realigned_count
+
+
+def clear_history_projection_cache(codex_dir: Path) -> bool:
+    """Invalidate stale thread_history projection cache with lock retries."""
+    history_db = codex_dir / "thread_history_1.sqlite"
+    if not history_db.exists():
+        return True
+
+    for attempt in range(3):
+        h_conn = None
+        try:
+            h_conn = sqlite3.connect(str(history_db), timeout=5.0)
+            with h_conn:
+                h_c = h_conn.cursor()
+                h_c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='thread_history_projection_state';")
+                if h_c.fetchone():
+                    h_c.execute("DELETE FROM thread_items;")
+                    h_c.execute("DELETE FROM thread_turns;")
+                    h_c.execute("DELETE FROM thread_history_projection_state;")
+            return True
+        except sqlite3.OperationalError:
+            time.sleep(0.3)
+        except Exception as e:
+            info(f"warning: history projection cache clear: {e}")
+            return False
+        finally:
+            if h_conn:
+                h_conn.close()
+    return False
+
+
 def sync_provider(target_provider: str, codex_dir: Path) -> int:
     target_provider = target_provider.strip().lower()
     if target_provider not in VALID_PROVIDERS:
@@ -150,26 +294,20 @@ def sync_provider(target_provider: str, codex_dir: Path) -> int:
         for fp, err in failed_files:
             info(f"  {os.path.basename(fp)}: {err}")
 
-    # 3. Invalidate/clear stale thread_history projection cache if files/threads were updated
-    history_db = codex_dir / "thread_history_1.sqlite"
-    if history_db.exists() and (updated_files > 0 or updated_threads > 0):
-        h_conn = None
-        try:
-            h_conn = sqlite3.connect(str(history_db))
-            with h_conn:
-                h_c = h_conn.cursor()
-                h_c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='thread_history_projection_state';")
-                if h_c.fetchone():
-                    h_c.execute("DELETE FROM thread_items;")
-                    h_c.execute("DELETE FROM thread_turns;")
-                    h_c.execute("DELETE FROM thread_history_projection_state;")
-        except Exception:
-            pass
-        finally:
-            if h_conn:
-                h_conn.close()
+    # 2.5. Re-align lineage cutoff offsets for forked child sessions if ancestors shrank
+    realigned_lineages = 0
+    if sessions_dir.exists():
+        realigned_lineages = realign_forked_lineages(sessions_dir)
 
-    info(f"synced {updated_threads} thread(s), {updated_files} session file(s) -> '{target_provider}'")
+    # 3. Invalidate/clear stale thread_history projection cache if files/threads were updated
+    if updated_files > 0 or updated_threads > 0 or realigned_lineages > 0:
+        clear_history_projection_cache(codex_dir)
+
+    msg = f"synced {updated_threads} thread(s), {updated_files} session file(s)"
+    if realigned_lineages > 0:
+        msg += f", realigned {realigned_lineages} forked lineage(s)"
+    msg += f" -> '{target_provider}'"
+    info(msg)
     return 1 if had_errors else 0
 
 
@@ -210,8 +348,10 @@ def verify_provider(target_provider: str, codex_dir: Path) -> int:
             if conn:
                 conn.close()
 
-    # 2. Verify JSONL files
+    # 2. Verify JSONL files & Lineage bounds
     if sessions_dir.exists():
+        thread_sizes = {}
+        # First pass: record all thread file sizes
         for root, _, files in os.walk(str(sessions_dir)):
             for f in files:
                 if f.endswith(".jsonl"):
@@ -230,8 +370,32 @@ def verify_provider(target_provider: str, codex_dir: Path) -> int:
                         current_prov = meta["payload"].get("model_provider")
                         if current_prov != target_provider:
                             errors.append(f"Session {f} has model_provider='{current_prov}' (Expected '{target_provider}')")
+                        tid = meta["payload"].get("id") or meta["payload"].get("session_id")
+                        if tid and tid not in thread_sizes:
+                            thread_sizes[tid] = os.path.getsize(file_path)
                     except Exception as e:
                         errors.append(f"Failed to verify {file_path}: {e}")
+
+        # Second pass: verify all history_base cutoff bounds
+        for root, _, files in os.walk(str(sessions_dir)):
+            for f in files:
+                if f.endswith(".jsonl"):
+                    file_path = os.path.join(root, f)
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as sfile:
+                            first_line = sfile.readline()
+                        if first_line:
+                            meta = json.loads(first_line)
+                            hbase = meta.get("payload", {}).get("history_base")
+                            if isinstance(hbase, dict):
+                                ptid = hbase.get("thread_id")
+                                cutoff = hbase.get("end_byte_offset")
+                                if ptid in thread_sizes and cutoff is not None:
+                                    parent_size = thread_sizes[ptid]
+                                    if cutoff > parent_size:
+                                        errors.append(f"Session {f} has cutoff byte offset {cutoff} > parent size {parent_size}")
+                    except Exception:
+                        pass
 
     if errors:
         error(f"verification failed: {len(errors)} issue(s)")

@@ -57,7 +57,7 @@ model_provider = "custom"
 
 [model_providers.custom]
 name = "Custom Quota Pool"
-base_url = "http://127.0.0.1:8080/v1"
+base_url = "http://127.0.0.1:8090/v1"
 wire_api = "responses"
 
 [windows]

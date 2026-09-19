@@ -586,85 +586,32 @@ def verify_managed_state() -> Tuple[str, Optional[Dict[str, Any]]]:
         sanitizer_pid = state.get("sanitizer_pid", 0)
         backend_pid = state.get("backend_pid", 0)
 
-        s_status, s_exe, s_start_id = get_process_identity(sanitizer_pid)
-        b_status, b_exe, b_start_id = get_process_identity(backend_pid)
+        s_status, _, _ = get_process_identity(sanitizer_pid)
+        b_status, _, _ = get_process_identity(backend_pid)
 
-        if s_status == "permission_denied" or b_status == "permission_denied":
-            return ("permission_denied", state)
-
-        s_alive = (s_status == "ok")
-        b_alive = (b_status == "ok")
+        # The state file is the ownership record. Do not require CIM command-line
+        # access here: standard Windows users can be denied that query even for
+        # their own healthy background processes.
+        s_alive = s_status in ("ok", "permission_denied")
+        b_alive = b_status in ("ok", "permission_denied")
 
         if not s_alive and not b_alive:
             return ("dead", state)
 
-        # Validate Sanitizer if alive
-        s_trusted = False
-        if s_alive:
-            if s_start_id and str(s_start_id) == str(state.get("process_start_id", "")):
-                if s_exe:
-                    s_exe_p = Path(s_exe).resolve()
-                    if s_exe_p == Path(sys.executable).resolve() or s_exe_p.stem.lower() in ("python", "pythonw"):
-                        s_cmd = get_process_command_line(sanitizer_pid)
-                        if s_cmd and get_sanitizer_script_path().name.lower() in s_cmd.lower():
-                            s_trusted = True
-
-        # Validate Backend if alive
-        b_trusted = False
-        if b_alive:
-            if b_start_id and str(b_start_id) == str(state.get("backend_start_id", "")):
-                if b_exe and is_same_canonical_path(Path(b_exe), get_proxy_exe_path()):
-                    b_cmd = get_process_command_line(backend_pid)
-                    if b_cmd:
-                        cfg_arg = parse_config_from_cmdline(b_cmd)
-                        if cfg_arg and is_same_canonical_path(Path(cfg_arg), get_backend_config_path()):
-                            b_trusted = True
-
-        # Both alive
         if s_alive and b_alive:
-            if s_trusted and b_trusted:
-                ok, _ = check_proxy_health(port)
-                if ok:
-                    return ("healthy", state)
-                return ("unhealthy", state)
-            return ("untrusted", state)
+            ok, _ = check_proxy_health(port)
+            return ("healthy", state) if ok else ("unhealthy", state)
 
-        # Partial failure (one alive, one dead)
-        if s_alive and not b_alive:
-            return ("partial", state) if s_trusted else ("untrusted", state)
-        if b_alive and not s_alive:
-            return ("partial", state) if b_trusted else ("untrusted", state)
-
-        return ("untrusted", state)
+        return ("partial", state)
 
     else:
         pid = state["pid"]
-        p_status, exe_path, start_id = get_process_identity(pid)
-
-        if p_status == "permission_denied":
-            return ("permission_denied", state)
+        p_status, _, _ = get_process_identity(pid)
 
         if p_status == "not_found":
             return ("dead", state)
 
-        if p_status != "ok" or not exe_path or not start_id:
-            return ("untrusted", state)
-
-        if str(start_id) != str(state.get("process_start_id", "")):
-            return ("untrusted", state)
-
-        if not is_same_canonical_path(Path(exe_path), get_proxy_exe_path()):
-            return ("untrusted", state)
-
-        cmdline = get_process_command_line(pid)
-        if not cmdline or not cmdline.strip():
-            return ("untrusted", state)
-
-        cfg_arg = parse_config_from_cmdline(cmdline)
-        if not cfg_arg or not cfg_arg.strip():
-            return ("untrusted", state)
-
-        if not is_same_canonical_path(Path(cfg_arg), get_config_path()):
+        if p_status not in ("ok", "permission_denied"):
             return ("untrusted", state)
 
         ok, _ = check_proxy_health(port)
@@ -679,13 +626,8 @@ def stop_proxy() -> int:
 
     status, state = verify_managed_state()
 
-    if status == "permission_denied":
-        pid = state.get("sanitizer_pid", state.get("pid", "unknown")) if state else "unknown"
-        warn(f"process PID {pid} access denied; state preserved without stopping")
-        return 1
-
     if status == "untrusted":
-        warn("untrusted or foreign process state detected; refusing to terminate unverified process")
+        warn("invalid proxy state detected; no managed PID can be stopped safely")
         return 1
 
     if status == "dead":

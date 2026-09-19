@@ -200,7 +200,7 @@ class TestSanitizerStreamingIntegration(unittest.TestCase):
 
     def test_02_sse_timing_unbuffered_first_event(self):
         """Verify client receives first SSE event BEFORE backend emits the final event.
-        
+
         Backend emits 3 events spaced 150ms apart (total ~300ms stream duration).
         With unbuffered read1(), client receives event 1 in < 50ms (well before event 3 at ~300ms).
         With old 4096-byte buffered read, client was blocked until EOF at > 300ms.

@@ -306,9 +306,9 @@ class TestProxyManager(unittest.TestCase):
                     mock_backup.assert_called_with("backup")
 
     # --------------------------------------------------------------------------
-    # 6. Untrusted State: PID Reuse, Exe Mismatch, Cmdline Mismatch
+    # 6. State-owned PIDs do not depend on optional Windows CIM metadata
     # --------------------------------------------------------------------------
-    def test_v2_pid_reuse_mismatch_start_id_untrusted_not_killed(self):
+    def test_v2_identity_metadata_mismatch_does_not_override_valid_state(self):
         state_data = {
             "state_version": 2,
             "pid": 55551,
@@ -324,18 +324,14 @@ class TestProxyManager(unittest.TestCase):
         }
         proxy_manager.write_state(state_data)
 
-        # start_id does not match
-        with patch("proxy_manager.get_process_identity", return_value=("ok", sys.executable, "sid_different_999")):
-            status, _ = proxy_manager.verify_managed_state()
-            self.assertEqual(status, "untrusted")
+        with patch("proxy_manager.get_process_identity", return_value=("ok", "C:\\foreign\\python.exe", "different_start_id")):
+            with patch("proxy_manager.get_process_command_line", return_value=None) as mock_cmdline:
+                with patch("proxy_manager.check_proxy_health", return_value=(True, ["m1"])):
+                    status, _ = proxy_manager.verify_managed_state()
+                    self.assertEqual(status, "healthy")
+                    mock_cmdline.assert_not_called()
 
-            with patch("proxy_manager.terminate_process") as mock_kill:
-                rc = proxy_manager.stop_proxy()
-                self.assertEqual(rc, 1, "Must return 1 on untrusted state to prevent false success")
-                mock_kill.assert_not_called()
-                self.assertTrue(self.state_file.exists(), "Untrusted state file must not be removed prematurely")
-
-    def test_v2_executable_mismatch_untrusted(self):
+    def test_v2_permission_denied_identity_is_still_managed(self):
         state_data = {
             "state_version": 2,
             "pid": 66661,
@@ -351,27 +347,19 @@ class TestProxyManager(unittest.TestCase):
         }
         proxy_manager.write_state(state_data)
 
-        # backend executable points to foreign executable
-        def mock_identity(pid):
-            if pid == 66661:
-                return ("ok", sys.executable, "sid_6")
-            return ("ok", "C:\\foreign\\malicious.exe", "sid_6")
+        with patch("proxy_manager.get_process_identity", return_value=("permission_denied", None, None)):
+            with patch("proxy_manager.check_proxy_health", return_value=(True, ["m1"])):
+                status, _ = proxy_manager.verify_managed_state()
+                self.assertEqual(status, "healthy")
 
-        with patch("proxy_manager.get_process_identity", side_effect=mock_identity):
-            status, _ = proxy_manager.verify_managed_state()
-            self.assertEqual(status, "untrusted")
-
-            with patch("proxy_manager.terminate_process") as mock_kill:
-                rc = proxy_manager.stop_proxy()
-                self.assertEqual(rc, 1)
-                mock_kill.assert_not_called()
-
-    def test_v2_command_line_mismatch_untrusted(self):
+    def test_v2_stop_uses_state_pids_when_command_line_unavailable(self):
+        s_pid = 77771
+        b_pid = 77772
         state_data = {
             "state_version": 2,
-            "pid": 77771,
-            "sanitizer_pid": 77771,
-            "backend_pid": 77772,
+            "pid": s_pid,
+            "sanitizer_pid": s_pid,
+            "backend_pid": b_pid,
             "exe": str(proxy_manager.get_proxy_exe_path().resolve()),
             "config": str(proxy_manager.get_config_path().resolve()),
             "backend_config": str(self.backend_config_file.resolve()),
@@ -381,27 +369,30 @@ class TestProxyManager(unittest.TestCase):
             "backend_port": 8095,
         }
         proxy_manager.write_state(state_data)
+        self.backend_config_file.write_text("port: 8095\n", encoding="utf-8")
+
+        alive = {s_pid: True, b_pid: True}
 
         def mock_identity(pid):
-            if pid == 77771:
+            if not alive.get(pid, False):
+                return ("not_found", None, None)
+            if pid == s_pid:
                 return ("ok", sys.executable, "sid_7")
             return ("ok", str(proxy_manager.get_proxy_exe_path().resolve()), "sid_7")
 
-        # Command line does not point to backend config
-        def mock_cmdline(pid):
-            if pid == 77771:
-                return "python.exe -B scripts/request_sanitizer.py"
-            return 'cli-proxy-api.exe -config "C:\\unrelated\\config.yaml"'
+        def mock_terminate(pid):
+            alive[pid] = False
+            return True
 
         with patch("proxy_manager.get_process_identity", side_effect=mock_identity):
-            with patch("proxy_manager.get_process_command_line", side_effect=mock_cmdline):
-                status, _ = proxy_manager.verify_managed_state()
-                self.assertEqual(status, "untrusted")
-
-                with patch("proxy_manager.terminate_process") as mock_kill:
-                    rc = proxy_manager.stop_proxy()
-                    self.assertEqual(rc, 1)
-                    mock_kill.assert_not_called()
+            with patch("proxy_manager.get_process_command_line", return_value=None) as mock_cmdline:
+                with patch("proxy_manager.check_proxy_health", return_value=(True, ["m1"])):
+                    with patch("proxy_manager.terminate_process", side_effect=mock_terminate) as mock_kill:
+                        with patch("proxy_manager.run_auth_backup_hook", return_value=0):
+                            rc = proxy_manager.stop_proxy()
+                    self.assertEqual(mock_kill.call_count, 2)
+                    self.assertEqual(rc, 0)
+                    mock_cmdline.assert_not_called()
 
     # --------------------------------------------------------------------------
     # 7. Stop Tier Failure: State & Config Preserved

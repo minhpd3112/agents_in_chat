@@ -72,7 +72,7 @@ Sau khi cài đặt, có thể gọi lệnh `aic` từ bất kỳ thư mục nà
 
 Theo dõi trực quan trạng thái tài khoản, lưu lượng request và live logs qua trình duyệt:
 
-- **Địa chỉ:** `http://127.0.0.1:8080/management.html`
+- **Địa chỉ:** `http://127.0.0.1:8090/management.html`
 - **Mật khẩu mặc định:** `aic` (tích chọn Remember password để tự động lưu phiên)
 
 ---

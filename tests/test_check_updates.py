@@ -31,7 +31,7 @@ def test_check_updates():
 
     # 3. Local version reading
     local_ver = get_local_version()
-    assert local_ver == "1.1.5"
+    assert local_ver == "1.1.6"
 
     # 4. Direct remote check and explicit offline result (no persistent cache)
     with patch("check_updates.fetch_remote_version", return_value="1.2.0"):

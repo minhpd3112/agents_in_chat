@@ -1,7 +1,8 @@
 import json, os, sys, stat
 
 def test_models_cache():
-    cache_path = os.path.expanduser("~/.codex/models_cache.json")
+    codex_dir = os.environ.get("AIC_CODEX_DIR") or os.path.expanduser("~/.codex")
+    cache_path = os.path.join(codex_dir, "models_cache.json")
     if not os.path.exists(cache_path):
         return False, f"File {cache_path} does not exist!"
     
@@ -25,7 +26,7 @@ def test_models_cache():
         return False, f"TTL not locked to 2099! Current: {data.get('fetched_at')}"
     
     models = {m.get('slug'): m for m in data.get('models', [])}
-    for slug in ['gemini-3.7-flash', 'gemini-3.8-flash', 'claude-sonnet-4.6-thinking', 'claude-opus-4.6-thinking', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'ox-alpha']:
+    for slug in ['gemini-3.8-flash', 'claude-sonnet-4.6-thinking', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'muse-spark-1.3']:
         if slug not in models:
             return False, f"Missing model: {slug}"
         m = models[slug]
@@ -40,12 +41,14 @@ def test_models_cache():
             efforts = [r.get('effort') for r in m.get('supported_reasoning_levels', [])]
             if 'xhigh' in efforts:
                 return False, f"{slug} contains 'xhigh' which was requested to be removed!"
-        if slug == 'ox-alpha':
-            efforts = [r.get('effort') for r in m.get('supported_reasoning_levels', [])]
-            if 'max' not in efforts:
-                return False, f"ox-alpha missing 'max' reasoning effort! Current: {efforts}"
-            if m.get('default_reasoning_level') != 'max':
-                return False, f"ox-alpha default_reasoning_level is '{m.get('default_reasoning_level')}' (expected 'max')"
+        if 'muse' in slug:
+            if m.get('tool_mode') != 'direct':
+                return False, f"{slug} tool_mode is '{m.get('tool_mode')}' (must be 'direct')"
+    
+    # 4. Upstream 429 filter check: Ensure no GPT-5 fingerprint in instructions
+    raw_str = json.dumps(data)
+    if "You are Codex, an agent based on GPT-5" in raw_str or "You are Codex, a coding agent based on GPT-5" in raw_str or "based on GPT-5" in raw_str:
+        return False, "models_cache.json contains GPT-5 fingerprint in instructions! (Triggers upstream 429 filter)"
     
     return True, f"Valid models_cache.json with {len(models)} models (visibility='list'), Read-Only LOCKED, TTL 2099, No BOM."
 

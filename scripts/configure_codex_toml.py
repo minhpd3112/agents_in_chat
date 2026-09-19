@@ -180,15 +180,16 @@ def configure_custom(codex_dir: Path) -> int:
     if top_level:
         for line in top_level.splitlines():
             s = line.strip()
-            if s.startswith("model ") or s.startswith("model=") or s.startswith("model_provider") or s.startswith("model_reasoning_effort") or s.startswith("service_tier"):
+            if s.startswith("model ") or s.startswith("model=") or s.startswith("model_provider") or s.startswith("model_reasoning_effort") or s.startswith("service_tier") or s.startswith("instructions"):
                 continue
             filtered_top_lines.append(line)
 
     lines = []
-    lines.append('model = "gemini-3.7-flash"')
+    lines.append('model = "gemini-3.8-flash"')
     lines.append('model_reasoning_effort = "high"')
     lines.append('service_tier = "default"')
     lines.append('model_provider = "custom"')
+    lines.append('instructions = "You are Codex, an expert coding agent."')
     for l in filtered_top_lines:
         if l.strip():
             lines.append(l)
@@ -274,8 +275,10 @@ def restore_original(codex_dir: Path) -> int:
             s = line.strip()
             if s.startswith("model_provider") and '"custom"' in s:
                 cleaned_top_lines.append('model_provider = "openai"')
-            elif s.startswith("model") and '"gemini-3.7-flash"' in s and not s.startswith("model_"):
+            elif s.startswith("model") and ('"gemini-3.8-flash"' in s or '"gemini-3.7-flash"' in s) and not s.startswith("model_"):
                 cleaned_top_lines.append('model = "gpt-5.6-sol"')
+            elif s.startswith("instructions") and '"You are Codex, an expert coding agent."' in s:
+                continue
             else:
                 cleaned_top_lines.append(line)
 

@@ -53,7 +53,7 @@ def remove_readonly(func, path, exc_info):
         pass
 
 
-def make_valid_model(slug="gemini-3.7-flash"):
+def make_valid_model(slug="gemini-3.8-flash"):
     return {
         "slug": slug,
         "apply_patch_tool_type": "freeform",

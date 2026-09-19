@@ -27,7 +27,7 @@ def test_proxy_health():
                 return False, f"HTTP status {resp.status}"
             data = json.loads(resp.read().decode('utf-8'))
             models = [m.get('id') for m in data.get('data', [])]
-            required = ['gemini-3.7-flash', 'claude-sonnet-4.6-thinking', 'gpt-5.6-luna']
+            required = ['gemini-3.8-flash', 'claude-sonnet-4.6-thinking', 'gpt-5.6-luna']
             for r in required:
                 if r not in models:
                     return False, f"Missing model {r} in /v1/models (found: {models})"

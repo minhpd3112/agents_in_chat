@@ -22,8 +22,6 @@ def test_config_yaml():
     
     for req_name, exp_alias in [
         ("claude-sonnet-4-6", "claude-sonnet-4.6-thinking"),
-        ("claude-opus-4-6-thinking", "claude-opus-4.6-thinking"),
-        ("gemini-3.7-flash-high", "gemini-3.7-flash"),
         ("gemini-3.8-flash-high", "gemini-3.8-flash")
     ]:
         matching = [item for item in aliases if item.get("name") == req_name and item.get("alias") == exp_alias]
@@ -32,16 +30,16 @@ def test_config_yaml():
         if not matching[0].get("force-mapping"):
             return False, f"force-mapping is not true for {req_name} -> {exp_alias}"
             
-    # 3. Check openai-compatibility (Ox Alpha from OpenCode Zen)
+    # 3. Check openai-compatibility (Muse Spark 1.3 from OpenCode Zen)
     compat_entries = data.get("openai-compatibility", [])
-    has_ox_alpha = False
+    has_muse = False
     for entry in compat_entries:
         for m in entry.get("models", []):
-            if m.get("alias") == "ox-alpha" or m.get("name") == "x-preview-f-free":
-                has_ox_alpha = True
+            if m.get("name") == "muse-spark-1.3-contributor-free" and m.get("alias") in ["muse-spark-1.3", "muse-3"]:
+                has_muse = True
                 break
-    if not has_ox_alpha:
-        return False, "Missing ox-alpha in openai-compatibility configuration"
+    if not has_muse:
+        return False, "Missing muse-spark-1.3-contributor-free in openai-compatibility configuration"
     
     return True, "config.yaml routing, retry policies, model aliases, and openai-compatibility are 100% compliant."
 

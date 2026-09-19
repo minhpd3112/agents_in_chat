@@ -163,7 +163,7 @@ def validate_models_template(data: Any) -> bool:
         # Project invariant: apply_patch_tool_type, tool_mode, visibility
         if m.get("apply_patch_tool_type") != "freeform":
             return False
-        if m.get("tool_mode") != "direct":
+        if m.get("tool_mode") not in ("direct", "code_mode_only"):
             return False
         if m.get("visibility") != "list":
             return False

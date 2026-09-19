@@ -185,19 +185,20 @@ try {
     if (-not (Test-Path $TemplateJson)) {
         throw "Khong tim thay template tai $TemplateJson!"
     }
-    if (Test-Path $ModelsCachePath) {
-        [System.IO.File]::SetAttributes($ModelsCachePath, [System.IO.FileAttributes]::Normal)
-    }
-
     # Tu dong nhan dien phien ban Codex CLI hien tai de dong bo client_version, mac dinh lay tu template
     $TemplateData = Get-Content $TemplateJson -Raw -Encoding UTF8 | ConvertFrom-Json
-    $CodexVer = if ($TemplateData.client_version) { $TemplateData.client_version } else { "0.153.0" }
+    $CodexVer = if ($TemplateData.client_version) { $TemplateData.client_version } else { "0.154.0" }
     try {
-        $VerOut = & codex --version 2>$null
+        $CodexApp = Get-Command -Name "codex.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $VerOut = if ($CodexApp) { & $CodexApp.Source --version 2>$null } else { & codex --version 2>$null }
         if ($VerOut -match '(\d+\.\d+\.\d+)') {
             $CodexVer = $Matches[1]
         }
     } catch {}
+
+    if (Test-Path $ModelsCachePath) {
+        [System.IO.File]::SetAttributes($ModelsCachePath, [System.IO.FileAttributes]::Normal)
+    }
     $TemplateData.client_version = $CodexVer
     $JsonContent = $TemplateData | ConvertTo-Json -Depth 30
     [IO.File]::WriteAllText($ModelsCachePath, $JsonContent, (New-Object System.Text.UTF8Encoding($false)))
@@ -216,8 +217,8 @@ try {
   "key": "public",
   "api_key": "public",
   "models": [
-    "x-preview-f-free",
-    "ox-alpha"
+    "muse-spark-1.3-contributor-free",
+    "muse-spark-1.3"
   ]
 }
 '@

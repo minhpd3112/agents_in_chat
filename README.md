@@ -2,17 +2,17 @@
 
 Công cụ tích hợp và quản trị Quota Pool đa tài khoản cho OpenAI Codex CLI, phục vụ 2 chức năng chính:
 
-1. **Đa mô hình trên cùng một phiên chat:** Làm việc và chuyển đổi linh hoạt giữa 8 mô hình AI hàng đầu trực tiếp trên cùng một đoạn chat trong OpenAI Codex CLI:
-   - **Google Antigravity:** `gemini-3.8-flash` (Mới nhất), `gemini-3.7-flash`, `claude-sonnet-4.6-thinking`, `claude-opus-4.6-thinking`.
+1. **Đa mô hình trên cùng một phiên chat:** Làm việc và chuyển đổi linh hoạt giữa các mô hình AI hàng đầu trực tiếp trên cùng một đoạn chat trong OpenAI Codex CLI:
+   - **Google Antigravity:** `gemini-3.8-flash`, `claude-sonnet-4.6-thinking`.
    - **OpenAI Codex:** `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`.
-   - **OpenCode Zen (Miễn phí):** `ox-alpha` (Stealth reasoning max).
+   - **OpenCode Zen:** `muse-spark-1.3` / `muse-3`.
 2. **Gộp Quota đa tài khoản:** Kết nối nhiều tài khoản OAuth Google và OpenAI, tự động cân bằng tải Round-Robin và tự động chuyển tài khoản khi gặp giới hạn Rate Limit 429 để duy trì làm việc liên tục không bị gián đoạn.
 
 ---
 
 ## 1. Cài đặt
 
-Kịch bản cài đặt tự động tải binary nếu thiếu, cấu hình `config.toml`, nạp cache 8 model chuẩn, khóa chống ghi đè, đồng bộ lịch sử chat cũ và đăng ký lệnh toàn cục `aic` cùng hàm Smart Wrapper Hook `codex` vào PATH và PowerShell Profile.
+Kịch bản cài đặt tự động tải binary nếu thiếu, cấu hình `config.toml`, nạp cache model, khóa chống ghi đè, đồng bộ lịch sử chat cũ và đăng ký lệnh toàn cục `aic` cùng hàm Smart Wrapper Hook `codex` vào PATH và PowerShell Profile.
 
 - **Windows (PowerShell):**
   ```powershell
@@ -60,6 +60,7 @@ Sau khi cài đặt, có thể gọi lệnh `aic` từ bất kỳ thư mục nà
 | `aic restart` | Khởi động lại Proxy Service |
 | `aic status` | Kiểm tra trạng thái Proxy, Provider và Khóa Cache |
 | `aic update` | Tự động cập nhật AIC lên bản mới nhất từ GitHub và đồng bộ hệ thống |
+| `aic repair` | Tự động fix lỗi, giải phóng tiến trình codex, khử độc lịch sử session và đồng bộ cache |
 | `aic test` | Chạy bộ kiểm thử tự động |
 | `aic login_agy` | Đăng nhập tài khoản Google Antigravity |
 | `aic login_codex` | Đăng nhập tài khoản OpenAI Codex |

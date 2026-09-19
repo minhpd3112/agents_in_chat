@@ -21,7 +21,7 @@ def test_gemini_tool_calling():
     port = get_port()
     url = f"http://127.0.0.1:{port}/v1/responses"
     payload = {
-        "model": "gemini-3.7-flash",
+        "model": "gemini-3.8-flash",
         "stream": True,
         "input": [
             {"role": "developer", "content": "You are Codex running on a machine."},
@@ -55,7 +55,7 @@ def test_gemini_tool_calling():
                     has_text_fallback = True
         
         if has_function_call and not has_text_fallback:
-            return True, "Gemini 3.7 Flash emitted native function_call SSE event!"
+            return True, "Gemini 3.8 Flash emitted native function_call SSE event!"
         elif has_text_fallback:
             return False, "Gemini fell back to plain text functions.exec (Protocol defect!)"
         else:

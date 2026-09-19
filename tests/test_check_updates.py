@@ -24,7 +24,7 @@ def test_check_updates():
 
     # 3. Local version reading
     local_ver = get_local_version()
-    assert local_ver == "1.1.2"
+    assert local_ver == "1.1.5"
 
     # 4. Cache read/write in isolated directory
     with tempfile.TemporaryDirectory() as tmp_dir:

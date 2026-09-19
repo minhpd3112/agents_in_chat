@@ -196,8 +196,8 @@ if [ ! -f "$ZEN_AUTH" ]; then
   "key": "public",
   "api_key": "public",
   "models": [
-    "x-preview-f-free",
-    "ox-alpha"
+    "muse-spark-1.3-contributor-free",
+    "muse-spark-1.3"
   ]
 }
 EOF

@@ -9,10 +9,13 @@ from unittest.mock import patch
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
+BIN_DIR = ROOT_DIR / "bin"
 sys.path.insert(0, str(SCRIPTS_DIR))
+sys.path.insert(0, str(BIN_DIR))
 
-from sync_sessions import sync_provider, verify_provider
+from sync_sessions import sync_provider, verify_provider, sanitize_session_item, sanitize_instruction_text, has_unsanitized_fingerprint
 from configure_codex_toml import configure_custom, restore_original, ensure_backup, compute_sha256_bytes, compute_sha256_file
+from aic import cmd_repair, cmd_repair_antigravity
 
 
 def setup_temp_codex_fixture(target_provider="openai"):
@@ -50,7 +53,7 @@ def run_all_unit_tests() -> bool:
     print("=" * 70)
 
     tests_passed = 0
-    total_tests = 16
+    total_tests = 19
 
     # Test 1: Invalid provider
     print("Test 1: Invalid provider returns 2 and modifies 0 files...")
@@ -429,6 +432,251 @@ def run_all_unit_tests() -> bool:
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    # Test 17: Structured JSON Sanitization Unit Tests (preserves user/assistant/tool messages)
+    print("Test 17: Structured JSON sanitization preserves user/assistant/tool messages and cleans developer <model_switch>...")
+    
+    # 17a. Developer <model_switch> with variant 1 (coding agent)
+    dev_item_1 = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "<model_switch>\nThe user was previously using a different model. You are Codex, a coding agent based on GPT-5.\n</model_switch>"}]
+        }
+    }
+    san_item, changed = sanitize_session_item(dev_item_1)
+    assert changed is True
+    assert "You are Codex, an expert coding agent." in san_item["payload"]["content"][0]["text"]
+    assert "based on GPT-5" not in san_item["payload"]["content"][0]["text"]
+
+    # 17b. Developer <model_switch> with variant 2 (agent) and string content
+    dev_item_2 = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "developer",
+            "content": "<model_switch>You are Codex, an agent based on GPT-5.</model_switch>"
+        }
+    }
+    san_item, changed = sanitize_session_item(dev_item_2)
+    assert changed is True
+    assert san_item["payload"]["content"] == "<model_switch>You are Codex, an expert coding agent.</model_switch>"
+
+    # 17c. Developer <model_switch> with generic based on GPT-5
+    dev_item_3 = {
+        "type": "message",
+        "role": "developer",
+        "content": "<model_switch>Context switch for system based on GPT-5.</model_switch>"
+    }
+    san_item, changed = sanitize_session_item(dev_item_3)
+    assert changed is True
+    assert "based on GPT-5" not in san_item["content"]
+    assert "an expert coding agent" in san_item["content"]
+
+    # 17d. Top-level instructions in turn_context
+    turn_ctx = {
+        "type": "turn_context",
+        "payload": {
+            "instructions": "You are Codex, a coding agent based on GPT-5.",
+            "cwd": "/workspace"
+        }
+    }
+    san_item, changed = sanitize_session_item(turn_ctx)
+    assert changed is True
+    assert san_item["payload"]["instructions"] == "You are Codex, an expert coding agent."
+
+    # 17e. Strict preservation: User message quoting 'based on GPT-5'
+    user_item = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Is this model based on GPT-5?"}]
+        }
+    }
+    san_item, changed = sanitize_session_item(user_item)
+    assert changed is False
+    assert san_item["payload"]["content"][0]["text"] == "Is this model based on GPT-5?"
+
+    # 17f. Strict preservation: Assistant message quoting 'based on GPT-5'
+    asst_item = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "I am not based on GPT-5."}]
+        }
+    }
+    san_item, changed = sanitize_session_item(asst_item)
+    assert changed is False
+    assert san_item["payload"]["content"][0]["text"] == "I am not based on GPT-5."
+
+    # 17g. Strict preservation: Tool call and output quoting 'based on GPT-5'
+    tool_call = {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "call_id": "c1",
+            "name": "grep",
+            "arguments": '{"query": "based on GPT-5"}'
+        }
+    }
+    san_item, changed = sanitize_session_item(tool_call)
+    assert changed is False
+    assert 'based on GPT-5' in san_item["payload"]["arguments"]
+
+    # 17h. Idempotency: running sanitize_session_item twice on sanitized item produces zero changes
+    san_again, changed_again = sanitize_session_item(san_item)
+    assert changed_again is False
+
+    print("  -> [PASS]")
+    tests_passed += 1
+
+    # Test 18: Full Session Sync with Mixed Content & verify_provider integration
+    print("Test 18: Full session sync sanitizes developer messages, preserves user messages, and verify_provider succeeds...")
+    tmp_dir, _, _ = setup_temp_codex_fixture("custom")
+    try:
+        sessions_dir = tmp_dir / "sessions" / "2026-08"
+        mixed_file = sessions_dir / "mixed_session.jsonl"
+        with open(mixed_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "session_meta", "payload": {"id": "m1", "session_id": "m1", "model_provider": "openai"}}) + "\n")
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "<model_switch>\nYou are Codex, a coding agent based on GPT-5.\n</model_switch>"}]
+                }
+            }) + "\n")
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Can you explain systems based on GPT-5?"}]
+                }
+            }) + "\n")
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Systems based on GPT-5 use advanced reasoning."}]
+                }
+            }) + "\n")
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "output": "Found match: based on GPT-5"
+                }
+            }) + "\n")
+
+        # Sync to custom
+        sync_rc = sync_provider("custom", tmp_dir)
+        assert sync_rc == 0, f"Expected 0, got {sync_rc}"
+
+        with open(mixed_file, "r", encoding="utf-8") as f:
+            lines = [json.loads(l) for l in f if l.strip()]
+
+        # Verify session_meta updated
+        assert lines[0]["payload"]["model_provider"] == "custom"
+        # Verify developer message sanitized
+        dev_text = lines[1]["payload"]["content"][0]["text"]
+        assert "You are Codex, an expert coding agent." in dev_text
+        assert "based on GPT-5" not in dev_text
+        # Verify user message preserved 100%
+        user_text = lines[2]["payload"]["content"][0]["text"]
+        assert user_text == "Can you explain systems based on GPT-5?"
+        # Verify assistant message preserved 100%
+        asst_text = lines[3]["payload"]["content"][0]["text"]
+        assert asst_text == "Systems based on GPT-5 use advanced reasoning."
+        # Verify tool output preserved 100%
+        tool_out = lines[4]["payload"]["output"]
+        assert tool_out == "Found match: based on GPT-5"
+
+        # Verification must succeed completely
+        v_rc = verify_provider("custom", tmp_dir, check_instructions=True)
+        assert v_rc == 0, f"Verification failed with code {v_rc}"
+
+        # Inject un-sanitized developer message -> verification must catch it!
+        with open(mixed_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": "<model_switch>You are Codex, an agent based on GPT-5.</model_switch>"
+                }
+            }) + "\n")
+        v_rc_injected = verify_provider("custom", tmp_dir, check_instructions=True)
+        assert v_rc_injected == 1, "Verification must fail when developer instructions contain based on GPT-5"
+
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # Test 19: cmd_repair auto-terminates running codex, reconciles cache and history in isolation
+    print("Test 19: cmd_repair auto-terminates running codex, reconciles cache and history in isolation...")
+    assert cmd_repair_antigravity is cmd_repair, "cmd_repair_antigravity must be an alias for cmd_repair"
+    tmp_dir, _, _ = setup_temp_codex_fixture("custom")
+    try:
+        # 19a. Auto-terminate running codex and proceed with repair seamlessly
+        os.environ["AIC_TEST_MODE"] = "1"
+        os.environ["AIC_MOCK_CODEX_RUNNING"] = "1"
+        try:
+            rc = cmd_repair(tmp_dir)
+            assert rc == 0, f"Expected 0 (auto-terminate & repair), got {rc}"
+        finally:
+            os.environ.pop("AIC_MOCK_CODEX_RUNNING", None)
+
+        # 19b. Success path: codex is not running
+        # Put an un-sanitized developer message in sessions
+        sessions_dir = tmp_dir / "sessions" / "2026-08"
+        sess_file = sessions_dir / "repair_test.jsonl"
+        with open(sess_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "session_meta", "payload": {"id": "r1", "session_id": "r1", "model_provider": "custom"}}) + "\n")
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "<model_switch>You are Codex, a coding agent based on GPT-5.</model_switch>"}]
+                }
+            }) + "\n")
+            f.write(json.dumps({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello User query"}]
+                }
+            }) + "\n")
+
+        repair_rc = cmd_repair(tmp_dir)
+        assert repair_rc == 0, f"cmd_repair failed with code {repair_rc}"
+
+        # Verify models_cache.json was created and locked Read-Only
+        cache_file = tmp_dir / "models_cache.json"
+        assert cache_file.exists(), "models_cache.json must exist"
+        if sys.platform == "win32":
+            import stat
+            is_ro = bool(os.stat(cache_file).st_mode & stat.S_IREAD) and not bool(os.stat(cache_file).st_mode & stat.S_IWRITE)
+            assert is_ro, "models_cache.json must be read-only"
+
+        # Verify developer message was sanitized
+        with open(sess_file, "r", encoding="utf-8") as f:
+            r_lines = [json.loads(l) for l in f if l.strip()]
+        assert "You are Codex, an expert coding agent." in r_lines[1]["payload"]["content"][0]["text"]
+        assert "based on GPT-5" not in r_lines[1]["payload"]["content"][0]["text"]
+        assert r_lines[2]["payload"]["content"][0]["text"] == "Hello User query"
+
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
     print("\n" + "=" * 70)
     print(f"OFFLINE UNIT TESTS SUMMARY: {tests_passed}/{total_tests} passed (100% Green)")
     print("=" * 70)
@@ -438,7 +686,7 @@ def run_all_unit_tests() -> bool:
 def test_sync_and_backup_unit():
     ok = run_all_unit_tests()
     if ok:
-        return True, "16/16 offline unit tests passed (Session Sync, Carrier Sanitizer, Lineage Re-align, Atomic Mock, BOM/LF & Backup/Restore)."
+        return True, "19/19 offline unit tests passed (Session Sync, Carrier Sanitizer, Lineage Re-align, Structured JSON Sanitization, Anti-filter Verification, Repair Tool & Backup/Restore)."
     else:
         return False, "Offline unit tests failed."
 

@@ -20,7 +20,7 @@ SUITES = [
     ("5. SQLite DB & Session Headers Provider Sync", test_sqlite_and_sessions),
     ("6. Session Sync & Atomic Backup/Restore Unit Tests", test_sync_and_backup_unit),
     ("7. Auth Token Atomic Auto-Backup & Recovery (NUL-byte Fault Injection)", test_auth_backup),
-    ("8. Gemini 3.7 Flash Native Tool Calling (No Silence)", test_gemini_tool_calling),
+    ("8. Gemini 3.8 Flash Native Tool Calling (Tiered/High)", test_gemini_tool_calling),
     ("9. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
     ("10. AIC Self-Update & SemVer Verification", test_check_updates),
 ]

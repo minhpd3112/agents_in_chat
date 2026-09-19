@@ -13,8 +13,22 @@ BIN_DIR = ROOT_DIR / "bin"
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(BIN_DIR))
 
-from sync_sessions import sync_provider, verify_provider, sanitize_session_item, sanitize_instruction_text, has_unsanitized_fingerprint
+from sync_sessions import (
+    sync_provider,
+    verify_provider,
+    sanitize_session_item,
+    sanitize_instruction_text,
+    has_unsanitized_fingerprint,
+    realign_forked_lineages,
+)
 from configure_codex_toml import configure_custom, restore_original, ensure_backup, compute_sha256_bytes, compute_sha256_file
+from config_manager import is_legacy_aic_instruction
+from instruction_compat import verify_instruction_template
+from session_store import (
+    find_ordinal_byte_offset,
+    verify_lineage_integrity,
+    realign_forked_lineages as store_realign_lineages,
+)
 from aic import cmd_repair, cmd_repair_antigravity
 
 
@@ -53,7 +67,7 @@ def run_all_unit_tests() -> bool:
     print("=" * 70)
 
     tests_passed = 0
-    total_tests = 19
+    total_tests = 23
 
     # Test 1: Invalid provider
     print("Test 1: Invalid provider returns 2 and modifies 0 files...")
@@ -677,6 +691,275 @@ def run_all_unit_tests() -> bool:
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    # Test 20: Instruction & Config edge cases (no top-level instruction, legacy cleanup, custom kept, template verification)
+    print("Test 20: Instruction & Config edge cases (no top-level, cleanup legacy, preserve custom & templates)...")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="aic_test_cfg_"))
+    try:
+        cfg_path = tmp_dir / "config.toml"
+
+        # 20a. Fresh install has NO top-level instructions key
+        rc = configure_custom(tmp_dir)
+        assert rc == 0
+        lines = cfg_path.read_text(encoding="utf-8").splitlines()
+        top_inst_lines = [l for l in lines if l.strip().startswith("instructions")]
+        assert len(top_inst_lines) == 0, f"Expected 0 top-level instructions, got {top_inst_lines}"
+
+        # 20b. Legacy AIC instruction is stripped on configure_custom
+        shutil.rmtree(tmp_dir / "aic-backup", ignore_errors=True)
+        cfg_path.write_text(
+            'model = "gemini-3.8-flash"\n'
+            'instructions = "You are Codex, an expert coding agent."\n'
+            'model_instructions_file = "my/file.md"\n'
+            '[profiles.test]\nname = "test"\n',
+            encoding="utf-8"
+        )
+        rc = configure_custom(tmp_dir)
+        assert rc == 0
+        content = cfg_path.read_text(encoding="utf-8")
+        assert 'instructions = "You are Codex, an expert coding agent."' not in content
+        assert 'model_instructions_file = "my/file.md"' in content
+        assert '[profiles.test]' in content
+
+        # 20c. User's custom instruction is preserved
+        shutil.rmtree(tmp_dir / "aic-backup", ignore_errors=True)
+        cfg_path.write_text(
+            'model = "gemini-3.8-flash"\n'
+            'instructions = "Always speak like a pirate."\n'
+            '[windows]\nsandbox = "elevated"\n',
+            encoding="utf-8"
+        )
+        rc = configure_custom(tmp_dir)
+        assert rc == 0
+        content = cfg_path.read_text(encoding="utf-8")
+        assert 'instructions = "Always speak like a pirate."' in content
+
+        # 20d. is_legacy_aic_instruction helper validation
+        assert is_legacy_aic_instruction('instructions = "You are Codex, an expert coding agent."') is True
+        assert is_legacy_aic_instruction("instructions = 'You are Codex, an expert coding agent.'") is True
+        assert is_legacy_aic_instruction('instructions = "Custom user prompt"') is False
+        assert is_legacy_aic_instruction('model_instructions_file = "You are Codex, an expert coding agent."') is False
+
+        # 20e. verify_instruction_template validation
+        template_file = ROOT_DIR / "docs" / "models_cache_template.json"
+        if template_file.exists():
+            tmpl_json = json.loads(template_file.read_text(encoding="utf-8"))
+            for m in tmpl_json.get("models", []):
+                t_str = m.get("model_messages", {}).get("instructions_template")
+                if t_str:
+                    ok, msg = verify_instruction_template(t_str)
+                    assert ok is True, f"Template for {m.get('slug')} failed verification: {msg}"
+
+        assert verify_instruction_template("")[0] is False
+        assert verify_instruction_template("short")[0] is False
+        assert verify_instruction_template("# Personality\n## Writing style\n# Rules for getting work done\n## Final answer\n" + "x" * 1200 + "\nbased on GPT-5")[0] is False
+
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # Test 21: cmd_repair failure injection and abort before mutation
+    print("Test 21: cmd_repair failure injection (kill fail aborts before mutation, step failures)...")
+    tmp_dir, _, _ = setup_temp_codex_fixture("custom")
+    try:
+        os.environ["AIC_TEST_MODE"] = "1"
+
+        # 21a. Kill failure stops repair BEFORE models_cache.json or config is touched
+        os.environ["AIC_MOCK_CODEX_RUNNING"] = "1"
+        os.environ["AIC_MOCK_KILL_FAIL"] = "1"
+        cache_file = tmp_dir / "models_cache.json"
+        if cache_file.exists():
+            cache_file.unlink()
+        rc = cmd_repair(tmp_dir)
+        assert rc == 1, f"Expected 1 (kill fail), got {rc}"
+        assert not cache_file.exists(), "models_cache.json must NOT be created when kill fails"
+        os.environ.pop("AIC_MOCK_CODEX_RUNNING", None)
+        os.environ.pop("AIC_MOCK_KILL_FAIL", None)
+
+        # 21b. Injected failure at repair-configure
+        os.environ["AIC_FAIL_STEP"] = "repair-configure"
+        rc = cmd_repair(tmp_dir)
+        assert rc == 1, f"Expected 1 at repair-configure, got {rc}"
+
+        # 21c. Injected failure at repair-models-cache
+        os.environ["AIC_FAIL_STEP"] = "repair-models-cache"
+        rc = cmd_repair(tmp_dir)
+        assert rc == 1, f"Expected 1 at repair-models-cache, got {rc}"
+
+        # 21d. Injected failure at repair-sync
+        os.environ["AIC_FAIL_STEP"] = "repair-sync"
+        rc = cmd_repair(tmp_dir)
+        assert rc == 1, f"Expected 1 at repair-sync, got {rc}"
+
+        # 21e. Injected failure at repair-sqlite-cache
+        os.environ["AIC_FAIL_STEP"] = "repair-sqlite-cache"
+        rc = cmd_repair(tmp_dir)
+        assert rc == 1, f"Expected 1 at repair-sqlite-cache, got {rc}"
+
+        # 21f. Injected failure at repair-verify
+        os.environ["AIC_FAIL_STEP"] = "repair-verify"
+        rc = cmd_repair(tmp_dir)
+        assert rc == 1, f"Expected 1 at repair-verify, got {rc}"
+        os.environ.pop("AIC_FAIL_STEP", None)
+
+        # 21g. Missing config.toml is automatically created and configured for custom
+        cfg_file = tmp_dir / "config.toml"
+        if cfg_file.exists():
+            cfg_file.unlink()
+        shutil.rmtree(tmp_dir / "aic-backup", ignore_errors=True)
+        rc = cmd_repair(tmp_dir)
+        assert rc == 0, f"Expected 0 for missing config repair, got {rc}"
+        assert cfg_file.exists(), "config.toml should have been auto-created"
+        assert 'model_provider = "custom"' in cfg_file.read_text(encoding="utf-8")
+
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        os.environ.pop("AIC_FAIL_STEP", None)
+        os.environ.pop("AIC_MOCK_CODEX_RUNNING", None)
+        os.environ.pop("AIC_MOCK_KILL_FAIL", None)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # Test 22: Sanitizer scope boundaries & non-switch developer messages
+    print("Test 22: Sanitizer scope boundaries & non-switch developer message preservation...")
+    # 22a. Developer message without <model_switch> is NOT modified even if containing 'based on GPT-5'
+    dev_msg_normal = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "This instruction is based on GPT-5 technical report notes."}]
+        }
+    }
+    san_item, changed = sanitize_session_item(dev_msg_normal)
+    assert changed is False
+    assert san_item["payload"]["content"][0]["text"] == "This instruction is based on GPT-5 technical report notes."
+    assert has_unsanitized_fingerprint(dev_msg_normal) is False
+
+    # 22b. Developer message with <model_switch> and suffix: switch is sanitized, suffix is preserved intact
+    suffix_text = "\n\n# Rules for getting work done\n1. Do not break existing tests."
+    dev_msg_switch = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": f"<model_switch>You are Codex, a coding agent based on GPT-5.</model_switch>{suffix_text}"}]
+        }
+    }
+    san_item, changed = sanitize_session_item(dev_msg_switch)
+    assert changed is True
+    res_text = san_item["payload"]["content"][0]["text"]
+    assert "<model_switch>You are Codex, an expert coding agent.</model_switch>" in res_text
+    assert suffix_text in res_text
+    assert has_unsanitized_fingerprint(san_item) is False
+
+    # 22c. User & assistant messages containing competitor name are untouched & not flagged
+    user_msg = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Is Codex based on GPT-5?"}]
+        }
+    }
+    assert sanitize_session_item(user_msg)[1] is False
+    assert has_unsanitized_fingerprint(user_msg) is False
+
+    asst_msg = {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Yes, originally based on GPT-5."}]
+        }
+    }
+    assert sanitize_session_item(asst_msg)[1] is False
+    assert has_unsanitized_fingerprint(asst_msg) is False
+
+    print("  -> [PASS]")
+    tests_passed += 1
+
+    # Test 23: Lineage mid-parent fork drift & ordinal-based verification/realignment
+    print("Test 23: Lineage mid-parent fork drift & ordinal-based realignment...")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="aic_test_lineage_"))
+    sessions_dir = tmp_dir / "sessions" / "2026-08"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        parent_file = sessions_dir / "parent.jsonl"
+        child_file = sessions_dir / "child.jsonl"
+
+        # Parent has 5 items with ordinals 0, 1, 2, 3, 4
+        p_lines = [
+            json.dumps({"type": "session_meta", "payload": {"id": "parent_thread", "model_provider": "custom"}}) + "\n",
+            json.dumps({"type": "turn_context", "ordinal": 0, "payload": {"turn": 0, "text": "Turn 0 context"}}) + "\n",
+            json.dumps({"type": "response_item", "ordinal": 1, "payload": {"carrier": "cpa-gemini-carrier-token-long-blob-padding-xyz"}}) + "\n",
+            json.dumps({"type": "turn_context", "ordinal": 2, "payload": {"turn": 2, "text": "Turn 2 context"}}) + "\n",
+            json.dumps({"type": "response_item", "ordinal": 3, "payload": {"text": "Turn 3 assistant"}}) + "\n",
+            json.dumps({"type": "response_item", "ordinal": 4, "payload": {"text": "Turn 4 assistant"}}) + "\n",
+        ]
+        parent_file.write_bytes("".join(p_lines).encode("utf-8"))
+
+        # Fork point: child forked at ordinal 2 (end_ordinal_exclusive = 2)
+        # Expected cutoff is start of line with ordinal 2 (i.e. length of lines 0, 1, 2)
+        expected_cutoff = len("".join(p_lines[:3]).encode("utf-8"))
+        assert find_ordinal_byte_offset(str(parent_file), 2) == expected_cutoff
+
+        # Child initially recorded this cutoff
+        c_lines = [
+            json.dumps({
+                "type": "session_meta",
+                "payload": {
+                    "id": "child_thread",
+                    "model_provider": "custom",
+                    "history_base": {
+                        "thread_id": "parent_thread",
+                        "end_byte_offset": expected_cutoff,
+                        "end_ordinal_exclusive": 2
+                    }
+                }
+            }) + "\n",
+            json.dumps({"type": "turn_context", "ordinal": 0, "payload": {"turn": 0, "text": "Child turn 0"}}) + "\n",
+        ]
+        child_file.write_bytes("".join(c_lines).encode("utf-8"))
+
+        # Initial check: integrity is valid
+        issues = verify_lineage_integrity(sessions_dir)
+        assert len(issues) == 0, f"Expected 0 issues initially, got {issues}"
+
+        # Now simulate parent turn 1 shrinking (e.g. carrier stripped by 40 bytes)
+        shrunk_line_2 = json.dumps({"type": "response_item", "ordinal": 1, "payload": {"clean": "ok"}}) + "\n"
+        shrunk_p_lines = [p_lines[0], p_lines[1], shrunk_line_2, p_lines[3], p_lines[4], p_lines[5]]
+        parent_file.write_bytes("".join(shrunk_p_lines).encode("utf-8"))
+
+        # Crucial check: parent_size is STILL > child's recorded cutoff!
+        new_parent_size = parent_file.stat().st_size
+        assert expected_cutoff < new_parent_size, "Parent size must still exceed old cutoff"
+
+        # But the cutoff is now DESYNCHRONIZED from ordinal 2!
+        # verify_lineage_integrity must catch this drift!
+        drift_issues = verify_lineage_integrity(sessions_dir)
+        assert len(drift_issues) == 1, f"Expected 1 drift issue, got {drift_issues}"
+        assert "differs from expected ordinal offset" in drift_issues[0]
+
+        # realign_forked_lineages must repair the offset
+        realigned, errs = store_realign_lineages(sessions_dir)
+        assert realigned == 1
+        assert errs == 0
+
+        # Post-realignment check: child end_byte_offset matches find_ordinal_byte_offset
+        new_expected = find_ordinal_byte_offset(str(parent_file), 2)
+        child_meta = json.loads(child_file.read_text(encoding="utf-8").splitlines()[0])
+        assert child_meta["payload"]["history_base"]["end_byte_offset"] == new_expected
+
+        # Post-realignment verification: 0 issues!
+        clean_issues = verify_lineage_integrity(sessions_dir)
+        assert len(clean_issues) == 0, f"Expected 0 issues after realignment, got {clean_issues}"
+
+        print("  -> [PASS]")
+        tests_passed += 1
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
     print("\n" + "=" * 70)
     print(f"OFFLINE UNIT TESTS SUMMARY: {tests_passed}/{total_tests} passed (100% Green)")
     print("=" * 70)
@@ -686,7 +969,7 @@ def run_all_unit_tests() -> bool:
 def test_sync_and_backup_unit():
     ok = run_all_unit_tests()
     if ok:
-        return True, "19/19 offline unit tests passed (Session Sync, Carrier Sanitizer, Lineage Re-align, Structured JSON Sanitization, Anti-filter Verification, Repair Tool & Backup/Restore)."
+        return True, "23/23 offline unit tests passed (Session Sync, Carrier Sanitizer, Lineage Re-align, Structured JSON Sanitization, Anti-filter Verification, Repair Tool, Instruction Compat, Failure Injections & Lineage Ordinal Drift)."
     else:
         return False, "Offline unit tests failed."
 

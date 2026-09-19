@@ -25,7 +25,7 @@ CODEX_DIR = Path(os.path.expanduser("~/.codex"))
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 from log_utils import error, info, warn  # noqa: E402
 from check_updates import get_local_version, check_for_update, prompt_update_if_available, run_update  # noqa: E402
-from proxy_manager import start_proxy, stop_proxy, restart_proxy, check_proxy_health, get_proxy_port  # noqa: E402
+from proxy_manager import start_proxy, stop_proxy, restart_proxy, check_proxy_health, get_proxy_port, verify_managed_state  # noqa: E402
 
 VERSION = get_local_version()
 
@@ -58,44 +58,7 @@ def cmd_restart() -> int:
     return restart_proxy()
 
 
-def is_codex_running() -> bool:
-    if os.environ.get("AIC_TEST_MODE") == "1":
-        return os.environ.get("AIC_MOCK_CODEX_RUNNING") == "1"
-    try:
-        if sys.platform == "win32":
-            res = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq codex.exe", "/NH"],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            return "codex.exe" in res.stdout.lower()
-        else:
-            res = subprocess.run(
-                ["pgrep", "-x", "codex"],
-                capture_output=True,
-                text=True,
-                check=False
-            )
-            return res.returncode == 0
-    except Exception:
-        return False
-
-
-def kill_codex() -> bool:
-    """Terminate running codex processes to release file locks."""
-    if os.environ.get("AIC_TEST_MODE") == "1":
-        return True
-    try:
-        import time
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/IM", "codex.exe"], capture_output=True, check=False)
-        else:
-            subprocess.run(["pkill", "-9", "-x", "codex"], capture_output=True, check=False)
-        time.sleep(0.3)
-        return not is_codex_running()
-    except Exception:
-        return False
+from repair import is_codex_running, kill_codex, run_repair
 
 
 def cmd_repair(target_codex_dir: Path = None) -> int:
@@ -107,62 +70,7 @@ def cmd_repair(target_codex_dir: Path = None) -> int:
     - Clears history projection cache.
     - Verifies integrity.
     """
-    codex_dir = target_codex_dir or Path(os.environ.get("AIC_CODEX_DIR") or CODEX_DIR)
-
-    print("=" * 65)
-    print("                    AIC REPAIR SYSTEM & CACHE")
-    print("=" * 65)
-
-    # 1. Release file locks: auto-terminate lingering codex process if detected
-    if is_codex_running():
-        info("Detected running codex.exe -> Auto-terminating process to release file locks...")
-        kill_codex()
-
-    # 2. Detect current provider and ensure config.toml has instructions configured
-    prov = "custom"
-    config_file = codex_dir / "config.toml"
-    if config_file.exists():
-        try:
-            content = config_file.read_text(encoding="utf-8")
-            if 'model_provider = "openai"' in content:
-                prov = "openai"
-            else:
-                from configure_codex_toml import configure_custom
-                configure_custom(codex_dir)
-        except Exception:
-            pass
-
-    # 3. Reconcile models_cache.json
-    print("[1/4] Reconciling models_cache.json from template...")
-    from check_updates import reconcile_models_cache
-    if not reconcile_models_cache(ROOT_DIR, codex_dir):
-        error("Failed to reconcile models_cache.json from template.")
-        return 1
-    info("models_cache.json successfully reconciled and locked Read-Only.")
-
-    # 4. Structured session sanitization & lineage realignment
-    print(f"[2/4] Sanitizing session histories and re-aligning lineages ({prov})...")
-    from sync_sessions import sync_provider, verify_provider
-    sync_rc = sync_provider(prov, codex_dir)
-    if sync_rc != 0:
-        error(f"Failed to sanitize and sync session histories (exit code {sync_rc}).")
-        return 1
-
-    # 5. Clear history projection cache
-    print("[3/4] Clearing SQLite history projection cache...")
-    from sync_sessions import clear_history_projection_cache
-    clear_history_projection_cache(codex_dir)
-
-    # 6. Verify provider & lineage integrity
-    print("[4/4] Verifying provider integrity...")
-    verify_rc = verify_provider(prov, codex_dir, check_instructions=True)
-    if verify_rc != 0:
-        error("Provider and session verification failed.")
-        return 1
-
-    print("=" * 65)
-    info("System repair completed successfully! You can now resume or switch models safely.")
-    return 0
+    return run_repair(target_codex_dir, ROOT_DIR)
 
 
 # Backwards compatibility alias
@@ -179,13 +87,22 @@ def cmd_status() -> int:
     auths_dir = ROOT_DIR / "auths"
     auth_count = len(list(auths_dir.glob("*.json"))) if auths_dir.exists() else 0
 
-    # 1. Proxy
+    # 1. Proxy & Sanitizer
     port = get_proxy_port()
     online, models = check_proxy_health(port)
     if online:
         models_str = ", ".join(models)
-        print(f"[OK] Proxy Service (127.0.0.1:{port}) : ONLINE [200 OK]")
-        print(f"     -> Models Online ({len(models)}): {models_str}")
+        status, state = verify_managed_state()
+        if state and state.get("state_version") == 2:
+            s_pid = state.get("sanitizer_pid")
+            b_pid = state.get("backend_pid")
+            b_port = state.get("backend_port", port + 5)
+            print(f"[OK] Request Sanitizer (127.0.0.1:{port}) : ONLINE [PID {s_pid}]")
+            print(f"     -> CLIProxyAPI Engine (127.0.0.1:{b_port}) : ONLINE [PID {b_pid}]")
+            print(f"     -> Models Online ({len(models)}): {models_str}")
+        else:
+            print(f"[OK] Proxy Service (127.0.0.1:{port}) : ONLINE [200 OK]")
+            print(f"     -> Models Online ({len(models)}): {models_str}")
     else:
         print(f"[OFFLINE] Proxy Service (127.0.0.1:{port}) : OFFLINE")
 

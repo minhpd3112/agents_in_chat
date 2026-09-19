@@ -11,6 +11,9 @@ from test_auth_backup import test_auth_backup
 from test_gemini_tool_calling import test_gemini_tool_calling
 from test_claude_tool_calling import test_claude_tool_calling
 from test_check_updates import test_check_updates
+from test_request_sanitizer_unit import test_request_sanitizer_unit
+from test_sanitizer_streaming_integration import test_sanitizer_streaming_integration
+from test_runtime_model_switch_regression import test_runtime_model_switch_regression
 
 SUITES = [
     (f"1. Proxy Health & Endpoint (http://127.0.0.1:{get_port()})", test_proxy_health),
@@ -23,6 +26,9 @@ SUITES = [
     ("8. Gemini 3.8 Flash Native Tool Calling (Tiered/High)", test_gemini_tool_calling),
     ("9. Claude Sonnet 4.6 Native Tool Calling (No Hallucination)", test_claude_tool_calling),
     ("10. AIC Self-Update & SemVer Verification", test_check_updates),
+    ("11. Request Sanitizer Payload Unit Tests (Competitor Branding Isolation)", test_request_sanitizer_unit),
+    ("12. Sanitizer Reverse Proxy SSE Streaming & Error Handling Integration", test_sanitizer_streaming_integration),
+    ("13. Runtime Model-Switch Multi-Turn Regression (Sol -> Claude -> Gemini -> Sol)", test_runtime_model_switch_regression),
 ]
 
 def run_all():
@@ -51,7 +57,7 @@ def run_all():
     print("=" * 70)
 
     if passed == len(SUITES):
-        print("ALL TESTS PASSED! Entire system is 100% robust and regression-free.\n")
+        print("ALL TESTS PASSED! All configured test suites passed.\n")
         return 0
     else:
         print("SOME TESTS FAILED! Please inspect the failures above.\n")

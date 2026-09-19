@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==============================================================================
 #  test_sanitizer_streaming_integration.py - Mock Backend Integration Tests
-#  Tests SSE streaming, zero-buffering, status passthrough & error handling.
+#  Tests SSE timing, fail-closed validation, status passthrough & error handling.
 #  Python stdlib-only.
 # ==============================================================================
 
@@ -16,7 +16,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
@@ -28,8 +28,17 @@ class MockBackendHandler(http.server.BaseHTTPRequestHandler):
     """Mock backend server simulating cli-proxy-api responses and SSE streaming."""
 
     def log_message(self, format: str, *args):
-        # Suppress logging during tests
         pass
+
+    def do_HEAD(self):
+        if self.path == "/v1/models":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "128")
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def do_GET(self):
         if self.path == "/v1/models":
@@ -46,6 +55,12 @@ class MockBackendHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/test-204":
+            self.send_response(204)
+            self.end_headers()
+        elif self.path == "/test-304":
+            self.send_response(304)
+            self.end_headers()
         elif self.path == "/health":
             self.send_response(200)
             self.send_header("Content-Length", "2")
@@ -56,17 +71,17 @@ class MockBackendHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        self.server.total_post_requests += 1
         content_len = int(self.headers.get("Content-Length", 0))
         req_body = self.rfile.read(content_len) if content_len > 0 else b""
 
-        # Record received payload on the server instance
         self.server.last_received_body = req_body
         try:
             self.server.last_received_json = json.loads(req_body.decode("utf-8"))
         except Exception:
             self.server.last_received_json = None
 
-        # Check for simulated error triggers in headers
+        # Check for simulated error triggers
         simulated_status = self.headers.get("X-Simulate-Status")
         if simulated_status:
             status_code = int(simulated_status)
@@ -78,7 +93,10 @@ class MockBackendHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(err_body)
             return
 
-        # Simulate SSE chunked streaming
+        # Check for timing test delay mode
+        sse_delay = float(self.headers.get("X-SSE-Delay", "0.01"))
+        notify_timing = (self.headers.get("X-Timing-Test") == "1")
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -87,21 +105,30 @@ class MockBackendHandler(http.server.BaseHTTPRequestHandler):
 
         events = [
             'event: response.created\ndata: {"type":"response.created","id":"resp_1"}\n\n',
-            'event: response.in_progress\ndata: {"type":"response.in_progress","id":"resp_1"}\n\n',
             'event: response.output_item.added\ndata: {"type":"item","id":"msg_1"}\n\n',
-            'event: response.text.delta\ndata: {"type":"delta","text":"Hello world"}\n\n',
             'event: response.completed\ndata: {"type":"response.completed"}\n\n',
         ]
 
-        for ev in events:
-            chunk = ev.encode("utf-8")
-            # Write chunk in standard HTTP chunked framing
-            self.wfile.write(f"{len(chunk):X}\r\n".encode("latin1") + chunk + b"\r\n")
-            self.wfile.flush()
-            time.sleep(0.01)
+        try:
+            for i, ev in enumerate(events):
+                chunk = ev.encode("utf-8")
+                self.wfile.write(f"{len(chunk):X}\r\n".encode("latin1") + chunk + b"\r\n")
+                self.wfile.flush()
 
-        self.wfile.write(b"0\r\n\r\n")
-        self.wfile.flush()
+                if i == 0 and notify_timing:
+                    self.server.first_event_sent_time = time.time()
+                    self.server.first_event_sent.set()
+
+                if i < len(events) - 1:
+                    time.sleep(sse_delay)
+                else:
+                    if notify_timing:
+                        self.server.final_event_sent_time = time.time()
+
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, socket.error):
+            pass
 
 
 class MockBackendServer(http.server.ThreadingHTTPServer):
@@ -109,13 +136,21 @@ class MockBackendServer(http.server.ThreadingHTTPServer):
         super().__init__(addr, MockBackendHandler)
         self.last_received_body = None
         self.last_received_json = None
+        self.total_post_requests = 0
+        self.first_event_sent = threading.Event()
+        self.first_event_sent_time = 0.0
+        self.final_event_sent_time = 0.0
+
+    def handle_error(self, request, client_address):
+        # Suppress broken pipe noise during deliberate disconnect tests
+        pass
 
 
 class TestSanitizerStreamingIntegration(unittest.TestCase):
-    backend_server = None
-    sanitizer_server = None
-    backend_port = 0
-    sanitizer_port = 0
+    backend_server: Optional[MockBackendServer] = None
+    sanitizer_server: Optional[SanitizerProxyServer] = None
+    backend_port: int = 0
+    sanitizer_port: int = 0
 
     @classmethod
     def setUpClass(cls):
@@ -145,6 +180,13 @@ class TestSanitizerStreamingIntegration(unittest.TestCase):
             cls.backend_server.shutdown()
             cls.backend_server.server_close()
 
+    def setUp(self):
+        self.backend_server.last_received_body = None
+        self.backend_server.last_received_json = None
+        self.backend_server.first_event_sent.clear()
+        self.backend_server.first_event_sent_time = 0.0
+        self.backend_server.final_event_sent_time = 0.0
+
     def test_01_models_endpoint_passthrough(self):
         """Verify GET /v1/models passes through cleanly."""
         url = f"http://127.0.0.1:{self.sanitizer_port}/v1/models"
@@ -156,50 +198,195 @@ class TestSanitizerStreamingIntegration(unittest.TestCase):
             self.assertIn("gemini-3.8-flash", model_ids)
             self.assertIn("claude-sonnet-4.6-thinking", model_ids)
 
-    def test_02_sse_streaming_and_sanitization(self):
-        """Verify POST /v1/responses sanitizes toxic payload and streams SSE without buffering."""
+    def test_02_sse_timing_unbuffered_first_event(self):
+        """Verify client receives first SSE event BEFORE backend emits the final event.
+        
+        Backend emits 3 events spaced 150ms apart (total ~300ms stream duration).
+        With unbuffered read1(), client receives event 1 in < 50ms (well before event 3 at ~300ms).
+        With old 4096-byte buffered read, client was blocked until EOF at > 300ms.
+        """
+        payload = {"model": "gemini-3.8-flash", "stream": True}
+        conn = http.client.HTTPConnection("127.0.0.1", self.sanitizer_port, timeout=10)
+        conn.request(
+            "POST",
+            "/v1/responses",
+            body=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-SSE-Delay": "0.15",
+                "X-Timing-Test": "1"
+            }
+        )
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+
+        # Read first SSE chunk
+        first_chunk = resp.read1(1024)
+        client_first_recv_time = time.time()
+        self.assertTrue(len(first_chunk) > 0)
+        self.assertIn(b"response.created", first_chunk)
+
+        # Read remaining stream
+        rest = resp.read()
+        conn.close()
+
+        # Assert: Client received event 1 BEFORE backend emitted event 3
+        final_emit = self.backend_server.final_event_sent_time
+        self.assertTrue(
+            client_first_recv_time < final_emit,
+            f"Expected client to receive event 1 ({client_first_recv_time}) BEFORE backend emitted event 3 ({final_emit})"
+        )
+
+    def test_03_fail_closed_malformed_json_returns_400_no_backend_forward(self):
+        """Verify malformed JSON returns HTTP 400 and is NOT forwarded to backend."""
+        prev_count = self.backend_server.total_post_requests
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        bad_body = b'{"model": "gemini-3.8-flash", "instructions": "based on GPT-5", incomplete'
+
+        req = urllib.request.Request(
+            url,
+            data=bad_body,
+            headers={"Content-Type": "application/json"}
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 400)
+        # Verify backend did NOT receive request
+        self.assertEqual(self.backend_server.total_post_requests, prev_count)
+
+    def test_04_fail_closed_array_root_json_returns_400(self):
+        """Verify non-object JSON root returns HTTP 400 and is NOT forwarded."""
+        prev_count = self.backend_server.total_post_requests
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        bad_body = json.dumps(["array", "root", "not", "object"]).encode("utf-8")
+
+        req = urllib.request.Request(
+            url,
+            data=bad_body,
+            headers={"Content-Type": "application/json"}
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertEqual(self.backend_server.total_post_requests, prev_count)
+
+    def test_05_fail_closed_unsupported_content_encoding_returns_415(self):
+        """Verify unsupported Content-Encoding returns HTTP 415 and is NOT forwarded."""
+        prev_count = self.backend_server.total_post_requests
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        body = json.dumps({"model": "gemini-3.8-flash"}).encode("utf-8")
+
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json", "Content-Encoding": "gzip"}
+        )
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+
+        self.assertEqual(ctx.exception.code, 415)
+        self.assertEqual(self.backend_server.total_post_requests, prev_count)
+
+    def test_06_query_string_url_still_sanitized(self):
+        """Verify /v1/responses?trace=1 is properly recognized and sanitized."""
         toxic_payload = {
             "model": "gemini-3.8-flash",
-            "stream": True,
             "instructions": "You are Codex, an agent based on GPT-5.",
-            "input": [
-                {
-                    "role": "developer",
-                    "content": "<model_switch>\nYou are Codex, a coding agent based on GPT-5.\n</model_switch>"
-                },
-                {"role": "user", "content": "hello"}
-            ]
+            "input": [{"role": "user", "content": "hi"}]
         }
-        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses?trace=1&session=123"
         req = urllib.request.Request(
             url,
             data=json.dumps(toxic_payload).encode("utf-8"),
             headers={"Content-Type": "application/json"}
         )
-
-        received_events = []
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(resp.status, 200)
-            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
-            for line in resp:
-                l = line.decode("utf-8").strip()
-                if l.startswith("event:"):
-                    received_events.append(l)
 
-        # 1. Verify client received all 5 SSE events in real-time
-        self.assertEqual(len(received_events), 5)
-        self.assertEqual(received_events[0], "event: response.created")
-        self.assertEqual(received_events[-1], "event: response.completed")
-
-        # 2. Verify backend received SANITIZED payload
+        # Verify backend received SANITIZED payload
         backend_json = self.backend_server.last_received_json
         self.assertIsNotNone(backend_json)
         self.assertEqual(backend_json["instructions"], "You are Codex, an expert coding agent.")
-        dev_content = backend_json["input"][0]["content"]
-        self.assertNotIn("based on GPT-5", dev_content)
-        self.assertIn("an expert coding agent", dev_content)
 
-    def test_03_status_code_passthrough(self):
+    def test_07_gpt_and_unknown_models_forwarded_byte_exact(self):
+        """Verify GPT and unknown models containing 'claude' are forwarded byte-exact."""
+        # 1. GPT-5.6 Sol
+        gpt_payload = {
+            "model": "gpt-5.6-sol",
+            "instructions": "You are Codex, an agent based on GPT-5.",
+            "input": [{"role": "user", "content": "hi"}]
+        }
+        raw_gpt = json.dumps(gpt_payload).encode("utf-8")
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        req = urllib.request.Request(url, data=raw_gpt, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(self.backend_server.last_received_body, raw_gpt)
+
+        # 2. Fake Claude model
+        fake_payload = {
+            "model": "fake-claude-99",
+            "instructions": "You are Codex, an agent based on GPT-5.",
+            "input": [{"role": "user", "content": "hi"}]
+        }
+        raw_fake = json.dumps(fake_payload).encode("utf-8")
+        req = urllib.request.Request(url, data=raw_fake, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(self.backend_server.last_received_body, raw_fake)
+
+    def test_08_head_204_and_304_responses_handled_properly(self):
+        """Verify HEAD, 204, and 304 responses do not hang and contain zero body bytes."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.sanitizer_port, timeout=5)
+
+        # 1. HEAD request
+        conn.request("HEAD", "/v1/models")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        body = resp.read()
+        self.assertEqual(body, b"")
+
+        # 2. 204 No Content
+        conn.request("GET", "/test-204")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 204)
+        body = resp.read()
+        self.assertEqual(body, b"")
+
+        # 3. 304 Not Modified
+        conn.request("GET", "/test-304")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 304)
+        body = resp.read()
+        self.assertEqual(body, b"")
+
+        conn.close()
+
+    def test_09_client_disconnect_handled_cleanly(self):
+        """Verify client disconnect does not crash sanitizer or leak connections."""
+        payload = {"model": "gemini-3.8-flash", "stream": True}
+        conn = http.client.HTTPConnection("127.0.0.1", self.sanitizer_port, timeout=5)
+        conn.request(
+            "POST",
+            "/v1/responses",
+            body=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-SSE-Delay": "0.1"}
+        )
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        # Read 1 chunk and close connection abruptly
+        _ = resp.read1(256)
+        conn.close()
+        time.sleep(0.15)
+
+        # Subsequent request must succeed normally
+        req2 = urllib.request.Request(f"http://127.0.0.1:{self.sanitizer_port}/v1/models")
+        with urllib.request.urlopen(req2, timeout=5) as resp2:
+            self.assertEqual(resp2.status, 200)
+
+    def test_10_status_code_passthrough(self):
         """Verify status codes (400, 429, 500, 503) are passed through verbatim."""
         for code in [400, 429, 500, 503]:
             url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
@@ -212,13 +399,12 @@ class TestSanitizerStreamingIntegration(unittest.TestCase):
                 urllib.request.urlopen(req, timeout=5)
             self.assertEqual(ctx.exception.code, code)
 
-    def test_04_backend_offline_returns_502(self):
+    def test_11_backend_offline_returns_502(self):
         """Verify 502 Bad Gateway is returned when backend is unreachable."""
-        # Create a sanitizer pointing to an unused port
         orphan_sanitizer = SanitizerProxyServer(
             ("127.0.0.1", 0),
             backend_host="127.0.0.1",
-            backend_port=59999  # Unused port
+            backend_port=59998
         )
         orphan_port = orphan_sanitizer.server_address[1]
         t = threading.Thread(target=orphan_sanitizer.serve_forever, daemon=True)

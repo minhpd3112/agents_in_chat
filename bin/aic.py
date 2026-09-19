@@ -78,31 +78,71 @@ cmd_repair_antigravity = cmd_repair
 
 
 
+def count_auth_credentials(auths_dir: Path):
+    """Safely parse auth JSON credential files.
+    Returns (enabled_count, disabled_count, invalid_count) without exposing secrets.
+    """
+    enabled = 0
+    disabled = 0
+    invalid = 0
+    if not auths_dir.exists():
+        return 0, 0, 0
+    for f in sorted(auths_dir.glob("*.json")):
+        if not f.is_file():
+            continue
+        try:
+            raw = f.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                invalid += 1
+                continue
+            if data.get("disabled") is True:
+                disabled += 1
+            else:
+                enabled += 1
+        except Exception:
+            invalid += 1
+    return enabled, disabled, invalid
+
+
 def cmd_status() -> int:
     print("=" * 65)
     print(f"  AGENTS IN CHAT (AIC) SYSTEM STATUS  |  v{VERSION}")
     print("=" * 65)
 
-    # Auth count is needed by both the Provider label and section 4
+    # Parse auth credentials safely
     auths_dir = ROOT_DIR / "auths"
-    auth_count = len(list(auths_dir.glob("*.json"))) if auths_dir.exists() else 0
+    enabled_count, disabled_count, invalid_count = count_auth_credentials(auths_dir)
+    auth_parts = [f"{enabled_count} enabled", f"{disabled_count} disabled"]
+    if invalid_count > 0:
+        auth_parts.append(f"{invalid_count} invalid")
+    auth_summary_str = ", ".join(auth_parts)
 
     # 1. Proxy & Sanitizer
     port = get_proxy_port()
+    status, state = verify_managed_state()
     online, models = check_proxy_health(port)
-    if online:
-        models_str = ", ".join(models)
-        status, state = verify_managed_state()
+
+    if status == "healthy":
+        models_str = ", ".join(models) if models else "none"
         if state and state.get("state_version") == 2:
             s_pid = state.get("sanitizer_pid")
             b_pid = state.get("backend_pid")
             b_port = state.get("backend_port", port + 5)
             print(f"[OK] Request Sanitizer (127.0.0.1:{port}) : ONLINE [PID {s_pid}]")
             print(f"     -> CLIProxyAPI Engine (127.0.0.1:{b_port}) : ONLINE [PID {b_pid}]")
-            print(f"     -> Models Online ({len(models)}): {models_str}")
+            print(f"     -> Model Catalog ({len(models)}): {models_str}")
         else:
-            print(f"[OK] Proxy Service (127.0.0.1:{port}) : ONLINE [200 OK]")
-            print(f"     -> Models Online ({len(models)}): {models_str}")
+            pid = state["pid"]
+            print(f"[OK] Proxy Service (127.0.0.1:{port}) : ONLINE [PID {pid}]")
+            print(f"     -> Model Catalog ({len(models)}): {models_str}")
+    elif status == "partial":
+        s_pid = state.get("sanitizer_pid", "unknown") if state else "unknown"
+        b_pid = state.get("backend_pid", "unknown") if state else "unknown"
+        print(f"[PARTIAL] Proxy Service Degraded : One process offline (Sanitizer PID: {s_pid}, Backend PID: {b_pid})")
+    elif status == "unhealthy":
+        pid = state.get("sanitizer_pid", state.get("pid", "unknown")) if state else "unknown"
+        print(f"[UNHEALTHY] Proxy Service (127.0.0.1:{port}) : UNRESPONSIVE [PID {pid}]")
     else:
         print(f"[OFFLINE] Proxy Service (127.0.0.1:{port}) : OFFLINE")
 
@@ -113,7 +153,7 @@ def cmd_status() -> int:
         try:
             content = config_file.read_text(encoding="utf-8")
             if "model_provider = \"custom\"" in content:
-                provider_str = f"custom (Agents Quota Pool - {auth_count} OAuth Accounts)"
+                provider_str = f"custom (Agents Quota Pool - {auth_summary_str})"
             elif "model_provider = \"openai\"" in content:
                 provider_str = "openai (Vanilla OpenAI Native)"
         except Exception:
@@ -134,7 +174,7 @@ def cmd_status() -> int:
         print(f"[LOCK] Models Cache Protection    : File cache chua duoc tao")
 
     # 4. Auth Accounts
-    print(f"[AUTH] OAuth Quota Accounts       : {auth_count} tai khoan san sang")
+    print(f"[AUTH] OAuth Quota Accounts       : {auth_summary_str}")
 
     # 5. Version / Update Status
     has_up, lver, rver = check_for_update(force=False)
@@ -143,7 +183,7 @@ def cmd_status() -> int:
     else:
         print(f"[VER]  AIC System Version        : v{lver} (Latest)")
     print("=" * 65)
-    return 0 if online else 1
+    return 0 if (status == "healthy") else 1
 
 def cmd_update() -> int:
     ok = run_update()

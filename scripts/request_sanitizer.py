@@ -20,6 +20,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
 
@@ -43,16 +44,25 @@ except ImportError:
     from instruction_compat import sanitize_instruction_text, sanitize_model_switch
 
 
-ANTIGRAVITY_KNOWN_MODELS: Set[str] = {
+ANTIGRAVITY_ALLOWLIST: Set[str] = {
+    # Public aliases in Codex CLI models_cache
     "gemini-3.8-flash",
-    "gemini-3.8-flash-high",
-    "gemini-3.7-flash",
     "claude-sonnet-4.6-thinking",
+    # Upstream model IDs in cli-proxy-api & Google Antigravity
+    "gemini-3.8-flash-high",
     "claude-sonnet-4-6",
+    # Additional Antigravity Gemini/Claude upstream IDs if configured
+    "gemini-3.7-flash",
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash-thinking",
+    "gemini-3.7-pro",
     "claude-opus-4-6",
     "claude-opus-4-6-thinking",
     "claude-3-7-sonnet",
 }
+
+# Backward compatibility alias
+ANTIGRAVITY_KNOWN_MODELS = ANTIGRAVITY_ALLOWLIST
 
 HOP_BY_HOP_HEADERS: Set[str] = {
     "connection",
@@ -67,18 +77,17 @@ HOP_BY_HOP_HEADERS: Set[str] = {
 
 
 def is_antigravity_model(model_name: Optional[str]) -> bool:
-    """Return True if the model is an Antigravity upstream model (Gemini or Claude).
+    """Return True strictly if the model is in the explicit Antigravity allowlist.
 
-    Only Antigravity upstream models enforce the competitor branding content filter
-    that triggers HTTP 429 when receiving 'based on GPT-5'.
-    OpenAI / GPT models (Sol, Terra, Luna, Astra) must never be sanitized.
+    Strict Contract:
+    - ONLY returns True for exact allowed public aliases or upstream IDs.
+    - Never uses substring matching (no 'gemini in ...' or 'claude in ...').
+    - OpenAI / GPT models and unknown / competitor models containing 'claude'
+      MUST return False and be forwarded byte-exact without modification.
     """
     if not model_name or not isinstance(model_name, str):
         return False
-    normalized = model_name.lower().strip()
-    if normalized in ANTIGRAVITY_KNOWN_MODELS:
-        return True
-    return "gemini" in normalized or "claude" in normalized
+    return model_name.strip().lower() in ANTIGRAVITY_ALLOWLIST
 
 
 def sanitize_request_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
@@ -161,24 +170,83 @@ class SanitizerProxyHandler(http.server.BaseHTTPRequestHandler):
             except (ValueError, IndexError):
                 pass
 
-    def _handle_forward(self, method: str) -> None:
-        content_len = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_len) if content_len > 0 else b""
+    def _send_error_response(self, code: int, message: str, error_type: str = "invalid_request_error") -> None:
+        err_body = json.dumps({
+            "error": {
+                "type": error_type,
+                "code": code,
+                "message": message,
+            }
+        }).encode("utf-8")
+        self.send_response_only(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(err_body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        try:
+            self.wfile.write(err_body)
+            self.wfile.flush()
+        except Exception:
+            pass
 
-        # Intercept and sanitize POST /v1/responses
-        path_lower = self.path.lower()
-        if method in ("POST", "PUT", "PATCH") and (
-            path_lower == "/v1/responses" or path_lower.endswith("/responses")
-        ):
-            if body:
-                try:
-                    payload = json.loads(body.decode("utf-8"))
-                    sanitized_payload, modified = sanitize_request_payload(payload)
-                    if modified:
-                        body = json.dumps(sanitized_payload, ensure_ascii=False).encode("utf-8")
-                except Exception as ex:
-                    # If JSON parsing fails, pass through original body untouched
-                    warn(f"failed to parse/sanitize request payload: {ex}")
+    def _handle_forward(self, method: str) -> None:
+        parsed_url = urllib.parse.urlsplit(self.path)
+        normalized_path = parsed_url.path
+
+        content_len_hdr = self.headers.get("Content-Length")
+        body: bytes = b""
+
+        # Intercept and sanitize POST /v1/responses (exact path, query params allowed)
+        if method == "POST" and normalized_path == "/v1/responses":
+            # Fail-closed check 1: Content-Encoding
+            content_encoding = self.headers.get("Content-Encoding")
+            if content_encoding and content_encoding.strip().lower() not in ("", "identity"):
+                self._send_error_response(415, "Unsupported Content-Encoding")
+                return
+
+            # Fail-closed check 2: Content-Length
+            if content_len_hdr is None or not content_len_hdr.strip().isdigit():
+                self._send_error_response(400, "Missing or invalid Content-Length")
+                return
+
+            expected_len = int(content_len_hdr.strip())
+            if expected_len <= 0:
+                self._send_error_response(400, "Empty request body")
+                return
+
+            body = self.rfile.read(expected_len)
+            if len(body) < expected_len:
+                self._send_error_response(400, "Incomplete request body")
+                return
+
+            # Fail-closed check 3: JSON parsing & structure
+            try:
+                decoded_str = body.decode("utf-8")
+                payload = json.loads(decoded_str)
+            except UnicodeDecodeError:
+                self._send_error_response(400, "Invalid UTF-8 encoding in request body")
+                return
+            except json.JSONDecodeError:
+                self._send_error_response(400, "Malformed JSON in request body")
+                return
+
+            if not isinstance(payload, dict):
+                self._send_error_response(400, "JSON payload root must be an object")
+                return
+
+            # Strict Model Matching: Only sanitize if model is in ANTIGRAVITY_ALLOWLIST
+            model = payload.get("model")
+            if is_antigravity_model(model):
+                sanitized_payload, modified = sanitize_request_payload(payload)
+                if modified:
+                    body = json.dumps(sanitized_payload, ensure_ascii=False).encode("utf-8")
+            # If not an Antigravity model (e.g. GPT/OpenAI, unknown, competitor), keep original raw bytes!
+        else:
+            # For all other paths / methods: pass through raw body if present
+            if content_len_hdr and content_len_hdr.strip().isdigit():
+                content_len = int(content_len_hdr.strip())
+                if content_len > 0:
+                    body = self.rfile.read(content_len)
 
         # Prepare backend connection
         backend_host: str = getattr(self.server, "backend_host", "127.0.0.1")
@@ -201,76 +269,63 @@ class SanitizerProxyHandler(http.server.BaseHTTPRequestHandler):
             conn.request(method, self.path, body=body if body else None, headers=forward_headers)
             resp = conn.getresponse()
         except (ConnectionRefusedError, socket.error, OSError) as e:
-            self._send_error_response(502, f"Backend proxy unavailable on {backend_host}:{backend_port}: {e}")
+            self._send_error_response(502, f"Backend proxy unavailable on {backend_host}:{backend_port}: {e}", error_type="proxy_error")
             return
         except socket.timeout:
-            self._send_error_response(504, "Backend proxy timed out")
+            self._send_error_response(504, "Backend proxy timed out", error_type="proxy_error")
             return
 
         # Forward response status and headers
-        self.send_response_only(resp.status, resp.reason)
-
-        has_content_length = False
-        is_chunked = False
-        for header_name, header_value in resp.getheaders():
-            hl = header_name.lower()
-            if hl in HOP_BY_HOP_HEADERS:
-                continue
-            if hl == "content-length":
-                has_content_length = True
-            self.send_header(header_name, header_value)
-
-        # For streaming responses without explicit Content-Length (like SSE / chunked streams)
-        if not has_content_length:
-            is_chunked = True
-            self.send_header("Transfer-Encoding", "chunked")
-
-        self.end_headers()
-
-        # Stream response body chunk-by-chunk in real-time (ZERO buffering)
         try:
-            while True:
-                chunk = resp.read(4096)
-                if not chunk:
-                    break
-                if is_chunked:
-                    self.wfile.write(f"{len(chunk):X}\r\n".encode("latin1") + chunk + b"\r\n")
-                else:
-                    self.wfile.write(chunk)
-                self.wfile.flush()
+            self.send_response_only(resp.status, resp.reason)
 
-            if is_chunked:
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            # Client closed connection early (e.g. user canceled/interrupted in Codex CLI)
-            pass
-        except Exception as e:
-            warn(f"streaming error during proxy forward: {e}")
+            # HEAD, 204, and 304 responses MUST NOT include a message body
+            no_body_status = (method == "HEAD" or resp.status in (204, 304))
+
+            has_content_length = False
+            for header_name, header_value in resp.getheaders():
+                hl = header_name.lower()
+                if hl in HOP_BY_HOP_HEADERS:
+                    continue
+                if hl == "content-length":
+                    has_content_length = True
+                self.send_header(header_name, header_value)
+
+            is_chunked = False
+            if not no_body_status and not has_content_length:
+                is_chunked = True
+                self.send_header("Transfer-Encoding", "chunked")
+
+            self.end_headers()
+
+            if no_body_status:
+                return
+
+            # Real-Time Streaming: Use read1() to read immediately available bytes without waiting for 4096 bytes
+            try:
+                while True:
+                    chunk = resp.read1(4096)
+                    if not chunk:
+                        break
+                    if is_chunked:
+                        self.wfile.write(f"{len(chunk):X}\r\n".encode("latin1") + chunk + b"\r\n")
+                    else:
+                        self.wfile.write(chunk)
+                    self.wfile.flush()
+
+                if is_chunked:
+                    self.wfile.write(b"0\r\n\r\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, socket.error):
+                # Client closed connection early (e.g. user canceled/interrupted in Codex CLI)
+                pass
+            except Exception as e:
+                warn(f"streaming error during proxy forward: {e}")
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
-
-    def _send_error_response(self, code: int, message: str) -> None:
-        err_body = json.dumps({
-            "error": {
-                "type": "proxy_error",
-                "code": code,
-                "message": message,
-            }
-        }).encode("utf-8")
-        self.send_response_only(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(err_body)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        try:
-            self.wfile.write(err_body)
-            self.wfile.flush()
-        except Exception:
-            pass
 
     def do_GET(self) -> None:
         self._handle_forward("GET")
@@ -309,6 +364,15 @@ class SanitizerProxyServer(http.server.ThreadingHTTPServer):
         super().__init__(server_address, SanitizerProxyHandler)
         self.backend_host = backend_host
         self.backend_port = backend_port
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Suppress socket errors (ConnectionResetError, BrokenPipeError) when client disconnects early."""
+        exc_type, exc_val, _ = sys.exc_info()
+        if exc_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        # For other unexpected errors, log concise message without traceback spam
+        if exc_val:
+            warn(f"server handler error from {client_address}: {exc_val}")
 
 
 def run_sanitizer_server(

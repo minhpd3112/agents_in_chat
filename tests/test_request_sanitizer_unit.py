@@ -193,6 +193,52 @@ class TestRequestSanitizerUnit(unittest.TestCase):
         self.assertFalse(mod2)
         self.assertEqual(pass1, pass2)
 
+    def test_11_fake_claude_model_not_in_allowlist_untouched(self):
+        """Case 11: Competitor / unknown model containing 'claude' must NOT be sanitized."""
+        payload = {
+            "model": "fake-claude-experimental-v9",
+            "instructions": "You are Codex, an agent based on GPT-5.",
+            "input": [
+                {"role": "developer", "content": "<model_switch>\nbased on GPT-5\n</model_switch>"}
+            ]
+        }
+        sanitized, modified = sanitize_request_payload(payload)
+        self.assertFalse(modified)
+        self.assertEqual(sanitized, payload)
+        self.assertFalse(is_antigravity_model("fake-claude-experimental-v9"))
+
+    def test_12_fake_gemini_model_not_in_allowlist_untouched(self):
+        """Case 12: Competitor / unknown model containing 'gemini' must NOT be sanitized."""
+        payload = {
+            "model": "my-custom-gemini-server",
+            "instructions": "You are Codex, an agent based on GPT-5.",
+            "input": [
+                {"role": "developer", "content": "<model_switch>\nbased on GPT-5\n</model_switch>"}
+            ]
+        }
+        sanitized, modified = sanitize_request_payload(payload)
+        self.assertFalse(modified)
+        self.assertEqual(sanitized, payload)
+        self.assertFalse(is_antigravity_model("my-custom-gemini-server"))
+
+    def test_13_allowlist_exact_models(self):
+        """Case 13: Exact known public aliases and upstream IDs must be recognized."""
+        for m in ["gemini-3.8-flash", "claude-sonnet-4.6-thinking", "gemini-3.8-flash-high", "claude-sonnet-4-6"]:
+            self.assertTrue(is_antigravity_model(m), f"Expected {m} to be recognized in allowlist")
+            self.assertTrue(is_antigravity_model(m.upper()), f"Expected case-insensitive {m.upper()} to be recognized")
+
+    def test_14_non_antigravity_models_rejected(self):
+        """Case 14: Non-antigravity models (GPT, Muse, None, empty) must return False."""
+        for m in ["gpt-5.6-sol", "gpt-6-astra", "muse-spark-1.3", None, "", 123]:
+            self.assertFalse(is_antigravity_model(m), f"Expected {m} to NOT be in allowlist")
+
+    def test_15_invalid_payload_types_handled_safely(self):
+        """Case 15: Non-dict payload returns unchanged with modified == False."""
+        for invalid_payload in [None, "hello", [1, 2, 3]]:
+            res, mod = sanitize_request_payload(invalid_payload)
+            self.assertFalse(mod)
+            self.assertEqual(res, invalid_payload)
+
 
 def test_request_sanitizer_unit():
     """Runner function for integration into run_tests.py."""

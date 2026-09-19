@@ -592,22 +592,50 @@ def verify_managed_state() -> Tuple[str, Optional[Dict[str, Any]]]:
         if s_status == "permission_denied" or b_status == "permission_denied":
             return ("permission_denied", state)
 
-        if s_status == "not_found" or b_status == "not_found":
+        s_alive = (s_status == "ok")
+        b_alive = (b_status == "ok")
+
+        if not s_alive and not b_alive:
             return ("dead", state)
 
-        if s_status != "ok" or b_status != "ok" or not s_start_id or not b_start_id:
+        # Validate Sanitizer if alive
+        s_trusted = False
+        if s_alive:
+            if s_start_id and str(s_start_id) == str(state.get("process_start_id", "")):
+                if s_exe:
+                    s_exe_p = Path(s_exe).resolve()
+                    if s_exe_p == Path(sys.executable).resolve() or s_exe_p.stem.lower() in ("python", "pythonw"):
+                        s_cmd = get_process_command_line(sanitizer_pid)
+                        if s_cmd and get_sanitizer_script_path().name.lower() in s_cmd.lower():
+                            s_trusted = True
+
+        # Validate Backend if alive
+        b_trusted = False
+        if b_alive:
+            if b_start_id and str(b_start_id) == str(state.get("backend_start_id", "")):
+                if b_exe and is_same_canonical_path(Path(b_exe), get_proxy_exe_path()):
+                    b_cmd = get_process_command_line(backend_pid)
+                    if b_cmd:
+                        cfg_arg = parse_config_from_cmdline(b_cmd)
+                        if cfg_arg and is_same_canonical_path(Path(cfg_arg), get_backend_config_path()):
+                            b_trusted = True
+
+        # Both alive
+        if s_alive and b_alive:
+            if s_trusted and b_trusted:
+                ok, _ = check_proxy_health(port)
+                if ok:
+                    return ("healthy", state)
+                return ("unhealthy", state)
             return ("untrusted", state)
 
-        if str(s_start_id) != str(state.get("process_start_id", "")) or str(b_start_id) != str(state.get("backend_start_id", "")):
-            return ("untrusted", state)
+        # Partial failure (one alive, one dead)
+        if s_alive and not b_alive:
+            return ("partial", state) if s_trusted else ("untrusted", state)
+        if b_alive and not s_alive:
+            return ("partial", state) if b_trusted else ("untrusted", state)
 
-        if not is_same_canonical_path(Path(b_exe), get_proxy_exe_path()):
-            return ("untrusted", state)
-
-        ok, _ = check_proxy_health(port)
-        if ok:
-            return ("healthy", state)
-        return ("unhealthy", state)
+        return ("untrusted", state)
 
     else:
         pid = state["pid"]
@@ -657,15 +685,12 @@ def stop_proxy() -> int:
         return 1
 
     if status == "untrusted":
-        remove_state()
-        clean_backend_config()
-        warn("untrusted or foreign process state detected; cleaned state without killing foreign process")
-        print("-> CLIProxyAPI hien khong chay.")
-        return 0
+        warn("untrusted or foreign process state detected; refusing to terminate unverified process")
+        return 1
 
     if status == "dead":
-        remove_state()
         clean_backend_config()
+        remove_state()
         info("stale proxy state found and cleaned (PID not running)")
         print("-> CLIProxyAPI hien khong chay.")
         if run_auth_backup_hook("backup") != 0:
@@ -674,30 +699,37 @@ def stop_proxy() -> int:
             return 1
         return 0
 
-    if status in ("healthy", "unhealthy"):
+    if status in ("healthy", "unhealthy", "partial"):
         if state and state.get("state_version") == 2:
-            s_pid = state["sanitizer_pid"]
-            b_pid = state["backend_pid"]
+            s_pid = state.get("sanitizer_pid", 0)
+            b_pid = state.get("backend_pid", 0)
             info(f"stopping verified processes (Sanitizer PID {s_pid}, Backend PID {b_pid})...")
-            stopped_s = terminate_process(s_pid)
-            stopped_b = terminate_process(b_pid)
-            clean_backend_config()
-            remove_state()
-            if stopped_s and stopped_b:
+            if is_process_alive(s_pid):
+                terminate_process(s_pid)
+            if is_process_alive(b_pid):
+                terminate_process(b_pid)
+
+            s_still_alive = is_process_alive(s_pid)
+            b_still_alive = is_process_alive(b_pid)
+
+            if not s_still_alive and not b_still_alive:
+                clean_backend_config()
+                remove_state()
                 print(f"-> [OFFLINE] Da tat tien trinh AIC Proxy & Request Sanitizer thanh cong (PID {s_pid}, {b_pid}).")
+                if run_auth_backup_hook("backup") != 0:
+                    _last_stop_backup_failed = True
+                    warn("Proxy stopped, but auth backup failed.")
+                    return 1
+                return 0
             else:
-                warn(f"one or more processes could not be stopped cleanly (Sanitizer: {stopped_s}, Backend: {stopped_b})")
-            if run_auth_backup_hook("backup") != 0:
-                _last_stop_backup_failed = True
-                warn("Proxy stopped, but auth backup failed.")
+                warn(f"one or more processes could not be stopped cleanly (Sanitizer alive: {s_still_alive}, Backend alive: {b_still_alive}); state retained")
                 return 1
-            return 0 if (stopped_s and stopped_b) else 1
         else:
             pid = state["pid"]
             info(f"stopping verified proxy process (PID {pid})...")
-            stopped = terminate_process(pid)
-            clean_backend_config()
-            if stopped:
+            terminate_process(pid)
+            if not is_process_alive(pid):
+                clean_backend_config()
                 remove_state()
                 print(f"-> [OFFLINE] Da tat tien trinh CLIProxyAPI thanh cong (PID {pid}).")
                 if run_auth_backup_hook("backup") != 0:
@@ -748,6 +780,7 @@ def spawn_daemon(cmd_list: list, cwd: Path) -> Optional[int]:
         CREATE_BREAKAWAY_FROM_JOB = 0x01000000
         flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
 
+        # 1. Try Popen with CREATE_BREAKAWAY_FROM_JOB
         try:
             proc = subprocess.Popen(
                 cmd_list,
@@ -761,26 +794,34 @@ def spawn_daemon(cmd_list: list, cwd: Path) -> Optional[int]:
         except Exception:
             pass
 
-        # Fallback to WMI/CIM Win32_Process.Create to escape nested job objects
+        # 2. Fallback to WMI/CIM Win32_Process.Create WITH Win32_ProcessStartup (ShowWindow = 0, CREATE_NO_WINDOW)
+        # to escape nested Job Objects without opening any console window or Windows Terminal tab.
         try:
             cmd_str = subprocess.list2cmdline([str(x) for x in cmd_list])
-            ps_escaped_cmd = cmd_str.replace("`", "``").replace('"', '`"')
-            ps_escaped_cwd = str(cwd.resolve()).replace("`", "``").replace('"', '`"')
+            ps_escaped_cmd = cmd_str.replace("`", "``").replace('"', '`"').replace("$", "`$")
+            ps_escaped_cwd = str(cwd.resolve()).replace("`", "``").replace('"', '`"').replace("$", "`$")
             ps_script = (
+                f"$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly "
+                f"-Property @{{ ShowWindow = [uint16]0; CreateFlags = [uint32]134217736 }}; "
                 f"(Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
-                f"-Arguments @{{CommandLine = \"{ps_escaped_cmd}\"; CurrentDirectory = \"{ps_escaped_cwd}\"}}).ProcessId"
+                f"-Arguments @{{ CommandLine = \"{ps_escaped_cmd}\"; CurrentDirectory = \"{ps_escaped_cwd}\"; "
+                f"ProcessStartupInformation = $si }}).ProcessId"
             )
             res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script],
+                ["powershell", "-NoProfile", "-Command", "-"],
+                input=ps_script,
                 capture_output=True,
                 text=True,
                 timeout=10.0
             )
             if res.returncode == 0 and res.stdout.strip().isdigit():
-                return int(res.stdout.strip())
+                pid = int(res.stdout.strip())
+                if pid > 0 and is_process_alive(pid):
+                    return pid
         except Exception:
             pass
 
+        # 3. Fallback to Popen without breakaway
         try:
             proc = subprocess.Popen(
                 cmd_list,
@@ -834,10 +875,31 @@ def start_proxy() -> int:
         error(f"process PID {pid} access is denied; start aborted")
         return 1
 
-    if status in ("dead", "untrusted"):
-        remove_state()
+    if status == "partial":
+        info("partial proxy state detected; cleaning trusted survivor before start...")
+        stop_code = stop_proxy()
+        if stop_code != 0:
+            error("failed to clean surviving process; start aborted")
+            return 1
+        status, state = verify_managed_state()
+
+    if status == "dead":
         clean_backend_config()
-        info("cleaned stale or untrusted proxy state")
+        remove_state()
+        info("cleaned stale proxy state")
+
+    if status == "untrusted":
+        if is_port_in_use(port):
+            error(f"port conflict: public port {port} is occupied by an unverified process; start aborted")
+            print(f"-> [ERROR] Port {port} bi chiem boi tien trinh khac khong phai AIC Proxy. Huy bo khoi dong.")
+            return 1
+        if is_port_in_use(backend_port):
+            error(f"port conflict: backend port {backend_port} is occupied; start aborted")
+            print(f"-> [ERROR] Backend port {backend_port} bi chiem boi tien trinh khac. Huy bo khoi dong.")
+            return 1
+        clean_backend_config()
+        remove_state()
+        info("cleaned untrusted proxy state")
 
     if is_port_in_use(port):
         error(f"port conflict: public port {port} is occupied by an unverified process; start aborted")
@@ -905,8 +967,14 @@ def start_proxy() -> int:
         return 1
 
     # 2. Launch Sanitizer Proxy on public port
+    py_bin = sys.executable
+    if sys.platform == "win32":
+        pyw = Path(sys.executable).with_name("pythonw.exe")
+        if pyw.exists():
+            py_bin = str(pyw)
+
     sanitizer_cmd = [
-        sys.executable,
+        py_bin,
         "-B",
         str(sanitizer_script),
         "--host", "127.0.0.1",

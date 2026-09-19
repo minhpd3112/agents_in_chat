@@ -53,33 +53,6 @@ def is_newer(remote: str, local: str) -> bool:
     except Exception:
         return False
 
-def get_cache_file() -> Path:
-    return get_codex_dir() / "aic_version.json"
-
-def read_cache() -> Dict[str, Any]:
-    cache_file = get_cache_file()
-    if not cache_file.exists():
-        return {}
-    try:
-        with open(cache_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict) and "latest_version" in data:
-                data["latest_version"] = clean_version_str(data["latest_version"])
-            return data
-    except Exception:
-        return {}
-
-def write_cache(data: Dict[str, Any]) -> None:
-    cache_file = get_cache_file()
-    try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = cache_file.with_suffix(".tmp." + str(time.time_ns()))
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, cache_file)
-    except Exception:
-        pass
-
 def fetch_remote_version(timeout: float = 1.5) -> Optional[str]:
     url = "https://raw.githubusercontent.com/minhpd3112/agents_in_chat/main/VERSION"
     req = urllib.request.Request(url, headers={"User-Agent": "AIC-Updater"})
@@ -93,35 +66,18 @@ def fetch_remote_version(timeout: float = 1.5) -> Optional[str]:
         pass
     return None
 
-def check_for_update(force: bool = False) -> Tuple[bool, str, str]:
+def check_for_update() -> Tuple[bool, str, str]:
     """
-    Checks if an update is available.
+    Checks GitHub directly for an available update.
     Returns (has_update, local_version, latest_version)
+    where latest_version is "unknown" when the network check fails.
     """
     local_ver = get_local_version()
-    cache = read_cache()
-    now = time.time()
-    last_checked = cache.get("last_checked_at", 0)
-    cached_remote = cache.get("latest_version", local_ver)
-
-    # Check network if forced or cache older than 24h
-    if force or (now - last_checked > 86400):
-        remote_ver = fetch_remote_version()
-        if remote_ver:
-            cached_remote = remote_ver
-            write_cache({
-                "latest_version": remote_ver,
-                "last_checked_at": now
-            })
-        else:
-            # Refresh timestamp even on failure to prevent hammering
-            write_cache({
-                "latest_version": cached_remote,
-                "last_checked_at": now
-            })
-
-    has_update = is_newer(cached_remote, local_ver)
-    return has_update, local_ver, cached_remote
+    remote_ver = fetch_remote_version()
+    if not remote_ver:
+        return False, local_ver, "unknown"
+    remote_ver = clean_version_str(remote_ver)
+    return is_newer(remote_ver, local_ver), local_ver, remote_ver
 
 def prompt_update_if_available() -> bool:
     """
@@ -134,7 +90,7 @@ def prompt_update_if_available() -> bool:
     if not sys.stdin.isatty():
         return False
 
-    has_update, local_ver, remote_ver = check_for_update(force=False)
+    has_update, local_ver, remote_ver = check_for_update()
     if not has_update:
         return False
 
@@ -459,7 +415,7 @@ def run_update(repo_dir: Optional[Path] = None) -> bool:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--check":
-        has_up, lver, rver = check_for_update(force=True)
+        has_up, lver, rver = check_for_update()
         print(f"Local: {lver}, Remote: {rver}, Update Available: {has_up}")
     elif len(sys.argv) > 1 and sys.argv[1] == "--run":
         ok = run_update()

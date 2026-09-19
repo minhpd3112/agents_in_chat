@@ -2,8 +2,8 @@
 """
 Unit tests for Codex preflight check:
 1. check_codex_running.py returns 0 (not running), 1 (running), 2 (indeterminate).
-2. install.ps1, uninstall.ps1, install.sh, uninstall.sh fail-closed when status is 1 or 2.
-3. Verifies zero mutations (config, cache, sessions, profile, PATH) on abort.
+2. Install/uninstall scripts terminate a running Codex process and continue.
+3. Indeterminate status or termination failure aborts before mutation.
 """
 
 import os
@@ -58,6 +58,23 @@ class TestCodexPreflight(unittest.TestCase):
         env["AIC_SKIP_PROXY"] = "1"
         return env
 
+    def _get_shell_env(self):
+        env = self._get_base_env()
+        if sys.platform == "win32":
+            for key in (
+                "AIC_CODEX_DIR",
+                "AIC_AUTHS_DIR",
+                "AIC_AUTHS_BACKUP_DIR",
+                "AIC_PROFILE_PATH",
+                "AIC_USER_PATH_FILE",
+                "AIC_BIN_LINK_DIR",
+            ):
+                env[key] = env[key].replace("\\", "/")
+            git_tools = Path(self.bash_bin).parent.parent / "usr" / "bin"
+            if git_tools.exists():
+                env["PATH"] = str(git_tools) + os.pathsep + env.get("PATH", "")
+        return env
+
     def test_preflight_helper_exit_codes(self):
         helper = ROOT_DIR / "scripts" / "check_codex_running.py"
         
@@ -79,7 +96,31 @@ class TestCodexPreflight(unittest.TestCase):
         r = subprocess.run([sys.executable, "-B", str(helper)], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0)
 
-    def test_install_ps1_aborts_before_mutation_when_codex_running(self):
+    def test_preflight_helper_kill_mode(self):
+        helper = ROOT_DIR / "scripts" / "check_codex_running.py"
+        env = self._get_base_env()
+        env["AIC_CODEX_RUNNING"] = "1"
+
+        r = subprocess.run(
+            [sys.executable, "-B", str(helper), "--kill"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("terminating it before continuing", r.stderr)
+
+        env["AIC_MOCK_KILL_FAIL"] = "1"
+        r = subprocess.run(
+            [sys.executable, "-B", str(helper), "--kill"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("failed to terminate all Codex CLI processes", r.stderr)
+
+    def test_install_ps1_kills_codex_and_continues(self):
         if sys.platform != "win32":
             return
         
@@ -91,16 +132,11 @@ class TestCodexPreflight(unittest.TestCase):
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(install_script)],
             env=env, capture_output=True, text=True
         )
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("Codex CLI is currently running", r.stderr)
-        
-        # Verify no mutations
-        self.assertEqual(self.config_path.read_bytes(), self.orig_config_content)
-        self.assertFalse((self.codex_dir / "models_cache.json").exists())
-        self.assertFalse((self.codex_dir / "aic-backup").exists())
-        self.assertFalse(self.profile_path.exists())
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("terminating it before continuing", r.stderr)
+        self.assertTrue((self.codex_dir / "models_cache.json").exists())
 
-    def test_uninstall_ps1_aborts_before_mutation_when_codex_running(self):
+    def test_uninstall_ps1_kills_codex_and_continues(self):
         if sys.platform != "win32":
             return
         
@@ -112,34 +148,35 @@ class TestCodexPreflight(unittest.TestCase):
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(uninstall_script)],
             env=env, capture_output=True, text=True
         )
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("Codex CLI is currently running", r.stderr)
-        self.assertEqual(self.config_path.read_bytes(), self.orig_config_content)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("terminating it before continuing", r.stderr)
 
-    def test_install_sh_aborts_before_mutation_when_codex_running(self):
-        env = self._get_base_env()
+    def test_install_sh_kills_codex_and_continues(self):
+        if sys.platform == "win32":
+            text = (ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+            self.assertIn('"$CHECK_CODEX_SCRIPT" --kill', text)
+            return
+        env = self._get_shell_env()
         env["AIC_CODEX_RUNNING"] = "1"
         
         install_script = ROOT_DIR / "install.sh"
-        r = subprocess.run([self.bash_bin, str(install_script)], env=env, capture_output=True, text=True)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("Codex CLI is currently running", r.stderr)
-        
-        # Verify no mutations
-        self.assertEqual(self.config_path.read_bytes(), self.orig_config_content)
-        self.assertFalse((self.codex_dir / "models_cache.json").exists())
-        self.assertFalse((self.codex_dir / "aic-backup").exists())
-        self.assertFalse(self.profile_path.exists())
+        r = subprocess.run([self.bash_bin, str(install_script).replace("\\", "/")], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("terminating it before continuing", r.stderr)
+        self.assertTrue((self.codex_dir / "models_cache.json").exists())
 
-    def test_uninstall_sh_aborts_before_mutation_when_codex_running(self):
-        env = self._get_base_env()
+    def test_uninstall_sh_kills_codex_and_continues(self):
+        if sys.platform == "win32":
+            text = (ROOT_DIR / "uninstall.sh").read_text(encoding="utf-8")
+            self.assertIn('"$CHECK_CODEX_SCRIPT" --kill', text)
+            return
+        env = self._get_shell_env()
         env["AIC_CODEX_RUNNING"] = "1"
         
         uninstall_script = ROOT_DIR / "uninstall.sh"
-        r = subprocess.run([self.bash_bin, str(uninstall_script)], env=env, capture_output=True, text=True)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("Codex CLI is currently running", r.stderr)
-        self.assertEqual(self.config_path.read_bytes(), self.orig_config_content)
+        r = subprocess.run([self.bash_bin, str(uninstall_script).replace("\\", "/")], env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("terminating it before continuing", r.stderr)
 
 
     def test_install_ps1_aborts_on_indeterminate_status(self):
@@ -158,10 +195,10 @@ class TestCodexPreflight(unittest.TestCase):
         self.assertFalse((self.codex_dir / "models_cache.json").exists())
 
     def test_install_sh_aborts_on_indeterminate_status(self):
-        env = self._get_base_env()
+        env = self._get_shell_env()
         env["AIC_CODEX_RUNNING"] = "2"
         install_script = ROOT_DIR / "install.sh"
-        r = subprocess.run([self.bash_bin, str(install_script)], env=env, capture_output=True, text=True)
+        r = subprocess.run([self.bash_bin, str(install_script).replace("\\", "/")], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
         self.assertIn("indeterminate Codex CLI process status", r.stderr)
         self.assertEqual(self.config_path.read_bytes(), self.orig_config_content)
@@ -170,4 +207,3 @@ class TestCodexPreflight(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

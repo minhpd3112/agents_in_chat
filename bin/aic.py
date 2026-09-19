@@ -177,8 +177,10 @@ def cmd_status() -> int:
     print(f"[AUTH] OAuth Quota Accounts       : {auth_summary_str}")
 
     # 5. Version / Update Status
-    has_up, lver, rver = check_for_update(force=False)
-    if has_up:
+    has_up, lver, rver = check_for_update()
+    if rver == "unknown":
+        print(f"[VER]  AIC System Version        : v{lver} (Update check unavailable)")
+    elif has_up:
         print(f"[VER]  AIC System Version        : v{lver} (Update available -> v{rver} | Run 'aic update')")
     else:
         print(f"[VER]  AIC System Version        : v{lver} (Latest)")

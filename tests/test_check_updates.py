@@ -1,11 +1,18 @@
 import os
 import sys
-import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
-from check_updates import parse_semver, is_newer, clean_version_str, get_local_version, read_cache, write_cache, prompt_update_if_available
+from check_updates import (
+    check_for_update,
+    clean_version_str,
+    get_local_version,
+    is_newer,
+    parse_semver,
+    prompt_update_if_available,
+)
 
 def test_check_updates():
     # 1. SemVer comparison
@@ -26,17 +33,18 @@ def test_check_updates():
     local_ver = get_local_version()
     assert local_ver == "1.1.5"
 
-    # 4. Cache read/write in isolated directory
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        os.environ["AIC_CODEX_DIR"] = tmp_dir
-        try:
-            assert read_cache() == {}
-            write_cache({"latest_version": "1.2.0", "last_checked_at": 123456.0})
-            cdata = read_cache()
-            assert cdata.get("latest_version") == "1.2.0"
-            assert cdata.get("last_checked_at") == 123456.0
-        finally:
-            os.environ.pop("AIC_CODEX_DIR", None)
+    # 4. Direct remote check and explicit offline result (no persistent cache)
+    with patch("check_updates.fetch_remote_version", return_value="1.2.0"):
+        has_update, checked_local, remote = check_for_update()
+        assert has_update is True
+        assert checked_local == local_ver
+        assert remote == "1.2.0"
+
+    with patch("check_updates.fetch_remote_version", return_value=None):
+        has_update, checked_local, remote = check_for_update()
+        assert has_update is False
+        assert checked_local == local_ver
+        assert remote == "unknown"
 
     # 5. Non-interactive guard (Must not prompt or hang in automated envs)
     os.environ["AIC_NON_INTERACTIVE"] = "1"
@@ -45,7 +53,7 @@ def test_check_updates():
     finally:
         os.environ.pop("AIC_NON_INTERACTIVE", None)
 
-    return True, "Self-update checker, semver parser, cache serialization, and non-interactive guard passed."
+    return True, "Self-update checker, semver parser, direct remote check, and non-interactive guard passed."
 
 if __name__ == "__main__":
     ok, msg = test_check_updates()

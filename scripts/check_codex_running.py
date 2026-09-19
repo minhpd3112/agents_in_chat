@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-#  check_codex_running.py - Preflight detector for active OpenAI Codex CLI
+#  check_codex_running.py - Preflight manager for active OpenAI Codex CLI
 #  Python stdlib-only.
 #
 #  Exit Codes:
@@ -12,6 +12,7 @@
 import os
 import sys
 import subprocess
+import time
 from pathlib import Path
 from typing import Tuple
 
@@ -134,11 +135,47 @@ def check_codex_status() -> Tuple[int, str]:
             return (2, f"Failed to execute process check: {e}")
 
 
+def kill_codex_processes() -> bool:
+    """Terminate all Codex CLI processes and confirm they are gone."""
+    if os.environ.get("AIC_TEST_MODE") == "1":
+        if os.environ.get("AIC_MOCK_KILL_FAIL") == "1":
+            return False
+        os.environ["AIC_CODEX_RUNNING"] = "0"
+        return True
+
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "codex.exe"],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            subprocess.run(
+                ["pkill", "-9", "-x", "codex"],
+                capture_output=True,
+                check=False,
+            )
+        time.sleep(0.3)
+        status, _ = check_codex_status()
+        return status == 0
+    except Exception as exc:
+        error(f"failed to terminate Codex CLI processes: {exc}")
+        return False
+
+
 def main() -> int:
+    kill_running = "--kill" in sys.argv[1:]
     code, reason = check_codex_status()
     if code == 0:
         return 0
     elif code == 1:
+        if kill_running:
+            info(f"Codex CLI is running ({reason}); terminating it before continuing")
+            if kill_codex_processes():
+                return 0
+            error("failed to terminate all Codex CLI processes; aborted")
+            return 1
         error(f"Codex CLI is currently running ({reason}); please close all Codex sessions before proceeding")
         return 1
     else:

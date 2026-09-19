@@ -47,8 +47,8 @@ if (-not (Test-Path $CheckCodexScript)) {
     exit 1
 }
 
-# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
-& $PythonExe -B $CheckCodexScript
+# Preflight: Terminate active Codex CLI processes before mutating its files
+& $PythonExe -B $CheckCodexScript --kill
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

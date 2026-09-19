@@ -60,8 +60,8 @@ if [ ! -f "$CHECK_CODEX_SCRIPT" ]; then
     exit 1
 fi
 
-# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
-"$PYTHON_BIN" -B "$CHECK_CODEX_SCRIPT" || exit $?
+# Preflight: Terminate active Codex CLI processes before mutating its files
+"$PYTHON_BIN" -B "$CHECK_CODEX_SCRIPT" --kill || exit $?
 
 
 echo "=== Khoi phuc cai dat goc OpenAI Codex CLI ==="

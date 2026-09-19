@@ -61,8 +61,8 @@ if [ ! -f "$CHECK_CODEX_SCRIPT" ]; then
     exit 1
 fi
 
-# Preflight: Check active Codex CLI process (fail-closed on 1 and 2)
-"$PYTHON_BIN" -B "$CHECK_CODEX_SCRIPT" || exit $?
+# Preflight: Terminate active Codex CLI processes before mutating its files
+"$PYTHON_BIN" -B "$CHECK_CODEX_SCRIPT" --kill || exit $?
 
 # Preflight: Validate auths isolation in test mode
 if [ "$AIC_TEST_MODE" = "1" ]; then

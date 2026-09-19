@@ -29,9 +29,12 @@ def test_check_updates():
     # 2. String sanitization (BOM & prefix)
     assert clean_version_str("\ufeffv1.1.0\n") == "1.1.0"
 
-    # 3. Local version reading
+    # 3. Local version reading (dynamically verified against the single source of truth)
     local_ver = get_local_version()
-    assert local_ver == "1.1.6"
+    expected_ver = (ROOT_DIR / "VERSION").read_text(encoding="utf-8-sig").strip().lstrip("\ufeff")
+    assert local_ver == expected_ver
+    assert len(parse_semver(local_ver)) >= 3
+    assert all(isinstance(part, int) and part >= 0 for part in parse_semver(local_ver))
 
     # 4. Direct remote check and explicit offline result (no persistent cache)
     with patch("check_updates.fetch_remote_version", return_value="1.2.0"):

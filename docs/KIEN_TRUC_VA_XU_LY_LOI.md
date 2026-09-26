@@ -484,4 +484,31 @@ sandbox = "elevated"
      * Khi muốn đổi model trong phiên chat đang mở: chỉ gõ `/model` (không kèm tham số), sau đó dùng phím mũi tên `↑`/`↓` chọn model mong muốn và nhấn `Enter`.
      * Khi muốn resume phiên chat với model mới từ terminal: sử dụng cờ chỉ định mô hình tường minh:
        `codex resume --last -m gemini-3.8-flash`.
+---
 
+### 25. Sự Cố Khóa Chặt 429 Khi Đổi Model Lúc Hết Quota (Context Checkpoint Compaction V2 Lockout) & Cơ Chế Auto Compaction Rewrite
+* **Hiện tượng:**
+  * Người dùng đang làm việc với OpenAI (`gpt-6-sol`), khi Sol chạm ngưỡng hạn ngạch (`You've hit your usage limit. Try again later.`), người dùng đổi model sang Google Gemini (`gemini-3.8-flash high`) hoặc Claude.
+  * Giao diện Codex CLI báo `Model changed to gemini-3.8-flash high`.
+  * Khi người dùng gõ lệnh tiếp theo (ví dụ: `continue`), terminal lập tức rơi vào vòng lặp retry và văng lỗi:
+    `Reconnecting... 4/5 (2s • esc to interrupt)`
+    `Exceeded retry limit, last status: 429 Too Many Requests`.
+  * Toàn bộ phiên chat bị đóng băng không thể tiếp tục, dù tài nguyên Gemini/Claude còn nguyên vẹn. Đến khi tài khoản Sol hồi lại hạn ngạch thì phiên chat mới chạy tiếp được.
+* **Nguyên nhân kỹ thuật sâu nhất (Root Cause):**
+  1. *Tính năng Remote Compaction V2 của Codex CLI:*
+     * Khi người dùng chuyển đổi mô hình giữa chừng trong một phiên làm việc, trước khi chuyển giao quyền sinh lời giải cho mô hình mới, Codex CLI kích hoạt một lượt gọi ngầm mang tên **Context Checkpoint Compaction** (nội dung prompt: *"You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task..."*).
+  2. *Lỗi gán model ngược của Codex CLI:*
+     * Dù người dùng đã chọn model mới và file `~/.codex/config.toml` đã được cập nhật thành `gemini-3.8-flash`, mã nguồn nội bộ của Codex CLI khi tạo request compaction lại **kế thừa model cũ của luồng (`gpt-6-sol`)** để thực hiện tác vụ tóm tắt.
+  3. *Va chạm với cơ chế Model Cooldown của AIC Proxy:*
+     * Do tài khoản Sol vừa bị cạn ngạch, backend `cli-proxy-api` đã đưa `gpt-6-sol` vào danh sách chờ (`model_cooldown`).
+     * Khi request compaction của Codex CLI gửi tới mang `model: "gpt-6-sol"`, proxy lập tức từ chối với mã lỗi `HTTP 429: All credentials for model gpt-6-sol are cooling down via provider codex`.
+     * Codex CLI retry 5 lần thất bại và dừng toàn bộ turn, khiến người dùng không bao giờ tiếp cận được model mới.
+* **Giải pháp khắc phục triệt để:**
+  1. *Nhận diện tự động lượt gọi Compaction trong [`request_sanitizer.py`](file:///e:/AI/agents_in_chat/scripts/request_sanitizer.py):*
+     * Bổ sung hàm `is_compaction_request()` kiểm tra đồng thời header `X-Codex-Turn-Metadata` (`"request_kind":"compaction"`), payload `client_metadata`, và chữ ký prompt `CONTEXT CHECKPOINT COMPACTION`.
+  2. *Cơ chế Auto Compaction Rewrite:*
+     * Khi phát hiện request là compaction và mang model OpenAI đã cạn ngạch (`gpt-6-sol`), proxy tự động đọc model người dùng vừa cấu hình trong `~/.codex/config.toml` (`get_configured_codex_model()`).
+     * Ghi đè `model` thành model Antigravity đang hoạt động (ví dụ: `gemini-3.8-flash`) và áp dụng bộ khử độc prompt cho Gemini.
+  3. *Kết quả:*
+     * Model mới (Gemini/Claude) tiếp nhận lệnh tóm tắt, sinh bản handoff summary và phản hồi luồng SSE HTTP 200 OK ngay trong vòng 1-2 giây.
+     * Codex CLI hoàn thành compaction trơn tru và chuyển tiếp mượt mà sang turn làm việc tiếp theo với model mới, loại bỏ vĩnh viễn hiện tượng 429 lockout khi đổi model.

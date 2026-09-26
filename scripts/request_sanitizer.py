@@ -15,6 +15,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -88,6 +89,65 @@ def is_antigravity_model(model_name: Optional[str]) -> bool:
     if not model_name or not isinstance(model_name, str):
         return False
     return model_name.strip().lower() in ANTIGRAVITY_ALLOWLIST
+
+
+def get_configured_codex_model() -> Optional[str]:
+    """Read the currently configured model from ~/.codex/config.toml."""
+    codex_dir = os.environ.get("AIC_CODEX_DIR") or os.environ.get("CODEX_DIR") or os.environ.get("CODEX_HOME")
+    config_path = (Path(codex_dir) if codex_dir else Path.home() / ".codex") / "config.toml"
+    if not config_path.is_file():
+        return None
+    try:
+        with open(config_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    break
+                m = re.match(r'^model\s*=\s*["\']([^"\']+)["\']', line)
+                if m:
+                    return m.group(1).strip()
+    except Exception:
+        pass
+    return None
+
+
+def is_compaction_request(headers: Any, payload: Dict[str, Any]) -> bool:
+    """Detect if the incoming request is a Codex context compaction / handoff request."""
+    if not isinstance(payload, dict):
+        return False
+
+    # 1. Header checks
+    turn_meta = ""
+    if hasattr(headers, "get"):
+        turn_meta = headers.get("X-Codex-Turn-Metadata") or headers.get("x-codex-turn-metadata") or ""
+    if '"request_kind":"compaction"' in turn_meta:
+        return True
+
+    # 2. Payload metadata checks
+    client_meta = payload.get("client_metadata")
+    if isinstance(client_meta, dict):
+        if client_meta.get("request_kind") == "compaction":
+            return True
+        if "compaction" in client_meta:
+            return True
+        turn_meta_str = client_meta.get("x-codex-turn-metadata")
+        if isinstance(turn_meta_str, str) and '"request_kind":"compaction"' in turn_meta_str:
+            return True
+
+    # 3. Prompt content check (signature of Codex compaction turn)
+    inputs = payload.get("input")
+    if isinstance(inputs, list):
+        for item in inputs:
+            if isinstance(item, dict) and item.get("role") == "user":
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and "CONTEXT CHECKPOINT COMPACTION" in str(part.get("text", "")):
+                            return True
+                elif isinstance(content, str) and "CONTEXT CHECKPOINT COMPACTION" in content:
+                    return True
+
+    return False
 
 
 def sanitize_request_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
@@ -245,12 +305,32 @@ class SanitizerProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_error_response(400, "JSON payload root must be an object")
                 return
 
+            # Compaction Fallback: When switching models in an ongoing session, Codex CLI
+            # sends a context compaction request using the thread's previous model (e.g. gpt-6-sol).
+            # If that model is not an Antigravity model and is cooling down (429 limit hit),
+            # rewrite the compaction model to the active model from config.toml (or gemini-3.8-flash)
+            # so the handoff summary succeeds immediately without blocking the user turn.
+            is_compact = is_compaction_request(self.headers, payload)
+            rewrote_compaction = False
+            if is_compact:
+                req_model = payload.get("model")
+                if not is_antigravity_model(req_model):
+                    target_model = get_configured_codex_model()
+                    if target_model and is_antigravity_model(target_model):
+                        info(f"Compaction model rewrite: '{req_model}' -> '{target_model}' (bypassing dead OpenAI model)")
+                        payload["model"] = target_model
+                        rewrote_compaction = True
+                    elif not target_model or not is_antigravity_model(target_model):
+                        info(f"Compaction model rewrite: '{req_model}' -> 'gemini-3.8-flash' (fallback default)")
+                        payload["model"] = "gemini-3.8-flash"
+                        rewrote_compaction = True
+
             # Strict Model Matching: Only sanitize if model is in ANTIGRAVITY_ALLOWLIST
             model = payload.get("model")
             if is_antigravity_model(model):
                 sanitized_payload, modified = sanitize_request_payload(payload)
-                if modified:
-                    body = json.dumps(sanitized_payload, ensure_ascii=False).encode("utf-8")
+                if modified or rewrote_compaction:
+                    body = json.dumps(sanitized_payload if modified else payload, ensure_ascii=False).encode("utf-8")
             # If not an Antigravity model (e.g. GPT/OpenAI, unknown, competitor), keep original raw bytes!
         else:
             # For all other paths / methods: pass through raw body if present

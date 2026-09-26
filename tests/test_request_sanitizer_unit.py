@@ -13,7 +13,9 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
 
 from request_sanitizer import (
+    get_configured_codex_model,
     is_antigravity_model,
+    is_compaction_request,
     sanitize_request_payload,
 )
 
@@ -267,6 +269,48 @@ class TestRequestSanitizerUnit(unittest.TestCase):
         part_text = sanitized["input"][0]["content"][0]["text"]
         self.assertNotIn("based on GPT-6", part_text)
         self.assertIn("an expert coding agent", part_text)
+
+    def test_17_is_compaction_request_via_header(self):
+        """Case 17: Compaction request detected via X-Codex-Turn-Metadata header."""
+        headers = {"X-Codex-Turn-Metadata": '{"request_kind":"compaction","session_id":"abc"}'}
+        payload = {"model": "gpt-6-sol", "input": []}
+        self.assertTrue(is_compaction_request(headers, payload))
+
+    def test_18_is_compaction_request_via_client_metadata(self):
+        """Case 18: Compaction request detected via client_metadata payload."""
+        headers = {}
+        payload = {
+            "model": "gpt-6-sol",
+            "client_metadata": {"request_kind": "compaction"},
+            "input": []
+        }
+        self.assertTrue(is_compaction_request(headers, payload))
+
+    def test_19_is_compaction_request_via_prompt_content(self):
+        """Case 19: Compaction request detected via CONTEXT CHECKPOINT COMPACTION signature."""
+        headers = {}
+        payload = {
+            "model": "gpt-6-sol",
+            "input": [
+                {
+                    "role": "user",
+                    "content": "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary..."
+                }
+            ]
+        }
+        self.assertTrue(is_compaction_request(headers, payload))
+
+    def test_20_regular_turn_not_compaction(self):
+        """Case 20: Regular turn request is not flagged as compaction."""
+        headers = {"X-Codex-Turn-Metadata": '{"request_kind":"turn","session_id":"abc"}'}
+        payload = {
+            "model": "gpt-6-sol",
+            "client_metadata": {"request_kind": "turn"},
+            "input": [{"role": "user", "content": "continue"}]
+        }
+        self.assertFalse(is_compaction_request(headers, payload))
+        self.assertFalse(is_compaction_request({}, None))
+        self.assertFalse(is_compaction_request({}, "invalid"))
 
 
 def test_request_sanitizer_unit():

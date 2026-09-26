@@ -140,15 +140,26 @@ def sanitize_request_payload(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], b
                         if sanitized != content:
                             item["content"] = sanitized
                             was_modified = True
+                    elif "based on GPT" in content:
+                        sanitized, changed = sanitize_instruction_text(content)
+                        if changed:
+                            item["content"] = str(sanitized)
+                            was_modified = True
                 elif isinstance(content, list):
                     for part in content:
                         if isinstance(part, dict):
                             text_val = part.get("text")
-                            if isinstance(text_val, str) and "<model_switch>" in text_val:
-                                sanitized = sanitize_model_switch(text_val)
-                                if sanitized != text_val:
-                                    part["text"] = sanitized
-                                    was_modified = True
+                            if isinstance(text_val, str):
+                                if "<model_switch>" in text_val:
+                                    sanitized = sanitize_model_switch(text_val)
+                                    if sanitized != text_val:
+                                        part["text"] = sanitized
+                                        was_modified = True
+                                elif "based on GPT" in text_val:
+                                    sanitized, changed = sanitize_instruction_text(text_val)
+                                    if changed:
+                                        part["text"] = str(sanitized)
+                                        was_modified = True
 
     return new_payload, was_modified
 

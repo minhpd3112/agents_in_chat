@@ -1,6 +1,6 @@
 # TÀI LIỆU KỸ THUẬT: TÍCH HỢP CLIPROXYAPI (ANTIGRAVITY & OPENAI) VÀO CODEX CLI
 
-Tài liệu giải trình kiến trúc, cấu hình chuẩn và cẩm nang xử lý 8 sự cố kỹ thuật cốt lõi khi tích hợp CLIProxyAPI (Google Antigravity + OpenAI Codex) vào OpenAI Codex CLI.
+Tài liệu giải trình kiến trúc, cấu hình chuẩn và cẩm nang xử lý 24 sự cố kỹ thuật cốt lõi khi tích hợp CLIProxyAPI (Google Antigravity + OpenAI Codex) vào OpenAI Codex CLI.
 
 ---
 
@@ -444,3 +444,44 @@ sandbox = "elevated"
   4. *Quản lý tiến trình bền vững (`spawn_daemon` qua WMI/CIM & Fail-Closed Lifecycle):*
      * Để vượt qua rào cản Windows Job Object (khi chạy trong IDE, runner hoặc AI sandbox), `proxy_manager.py` tích hợp hàm `spawn_daemon` kết hợp cơ chế `Win32_Process.Create` để đảm bảo cả Sanitizer Proxy và Backend Engine sống bền bỉ độc lập ngoài Job Object của shell cha.
      * Quản lý song song cả 2 PID (`sanitizer_pid`, `backend_pid`) với cơ chế kiểm tra sức khỏe kép và rollback dọn dẹp sạch sẽ khi dừng/khởi động lại.
+
+---
+
+### 24. Sự Cố Khử Độc "based on GPT-6" (Codex v0.156.1) & Xung Đột Model State Khi Đổi Model Giữa Chừng Trong Phiên Chat
+* **Hiện tượng:**
+  * Người dùng chuyển đổi mô hình từ OpenAI Sol (`gpt-5.6-sol` / `gpt-6-sol`) sang Google Gemini (`gemini-3.8-flash`) hoặc Claude giữa chừng trong một phiên chat Codex CLI đang tiếp diễn.
+  * Khi gửi prompt mới hoặc gõ `continue`, terminal báo lỗi:
+    `exceeded retry limit, last status: 429 Too Many Requests`.
+  * Nếu mở phiên chat mới toanh (`codex`) thì hoạt động bình thường, nhưng phiên chat cũ liên tục bị chặn.
+  * Ban đầu khi Sol cạn hạn ngạch, terminal báo `You’ve hit your usage limit. Try again later.` (HTTP 503/429). Dù thanh trạng thái (status bar) dưới đáy màn hình đã hiển thị `Gemini 3.8 Flash (High)`, khi gõ lệnh thì log proxy vẫn ghi nhận request gửi lên mang `model=gpt-6-sol` kèm mã lỗi:
+    `429 Too Many Requests: {"error":{"code":"model_cooldown","message":"All credentials for model gpt-6-sol are cooling down via provider codex"}}`.
+* **Phân tích nguyên nhân gốc rễ (Root Cause Analysis):**
+  1. *Codex CLI v0.156.1 nâng cấp Default Agent Prompt lên GPT-6:*
+     * Trong Codex CLI v0.156.1, OpenAI đã cập nhật agent base prompt từ `"You are Codex, an agent based on GPT-5."` sang `"You are Codex, an agent based on GPT-6."`.
+     * Khi chuyển đổi mô hình, thẻ `<model_switch>` được tiêm vào mang nội dung:
+       `"You are Codex, an agent based on GPT-6."`
+     * Bộ lọc trước đó trong `instruction_compat.py` và `request_sanitizer.py` chỉ xử lý chuỗi hardcoded `"based on GPT-5"`, hoàn toàn bỏ sót `"based on GPT-6"`. Khi gói tin gửi lên Google Antigravity Gateway, bộ lọc định danh đối thủ (Competitor Branding Content Filter) lập tức kích hoạt và ném mã lỗi giả `HTTP 429 Resource has been exhausted`.
+  2. *Cú pháp `/model <model-name>` trong Codex TUI bị xử lý thành câu chat thông thường:*
+     * Trong giao diện Codex CLI TUI, `/model` là một interactive slash command dùng để mở hộp thoại pop-up chọn mô hình (select menu). Cú pháp này **không nhận tham số dạng chuỗi** trực tiếp trên dòng lệnh.
+     * Khi người dùng gõ `/model gemini-3.8-flash`, Codex CLI không hiểu đó là lệnh đổi mô hình mà coi toàn bộ chuỗi này là một tin nhắn người dùng (`UserMessage`).
+     * Tin nhắn này được gửi thẳng lên API cho mô hình hiện tại của luồng (`gpt-6-sol`).
+  3. *Cơ chế lưu giữ mô hình theo phiên (Session Model Stickiness & Turn Context Inheritance):*
+     * Thanh trạng thái (bottom status bar) của Codex CLI đọc giá trị mặc định từ `~/.codex/config.toml` (`model = "gemini-3.8-flash"`), nhưng bên trong tệp session (`rollout-*.jsonl`), mọi `turn_context` trước đó và cài đặt luồng cũ đều lưu cứng `model = "gpt-6-sol"` (hơn 70 vị trí gán).
+     * Khi người dùng gõ `continue` hoặc gửi câu chat `"/model gemini-3.8-flash"`, Codex CLI tiếp tục kế thừa `model` từ turn context trước đó (`gpt-6-sol`).
+     * Do toàn bộ các tài khoản OpenAI Codex OAuth tokens trong pool đều đang trong trạng thái cạn hạn ngạch (`usage_limit_reached`), proxy `cli-proxy-api` lập tức trả về `HTTP 429 (model_cooldown)`.
+* **Giải pháp chuẩn hóa toàn diện:**
+  1. *Khử độc tổng quát bằng Regex (Universal Competitor Sanitizer) trong [`instruction_compat.py`](file:///e:/AI/agents_in_chat/scripts/instruction_compat.py) & [`request_sanitizer.py`](file:///e:/AI/agents_in_chat/scripts/request_sanitizer.py):*
+     * Bổ sung toàn bộ biến thể GPT-6 vào `EXACT_FORBIDDEN_FINGERPRINTS`.
+     * Tích hợp biểu thức chính quy tổng quát `\bbased on GPT(?:-\d+(?:\.\d+)?)?\b` thay thế bằng `"an expert coding agent"`, tự động vô hiệu hóa mọi biến thể GPT hiện tại và tương lai (GPT-4, GPT-5, GPT-6, GPT-7...).
+     * Hỗ trợ xử lý cả dạng thẻ đóng `</model_switch>` lẫn thẻ mở unclosed `<model_switch>`.
+     * Quét khử độc cả tin nhắn `developer` chứa chuỗi định danh đối thủ ngoài thẻ `<model_switch>`.
+  2. *Chuyển đổi triệt để Model trong Session File (`rollout-*.jsonl`):*
+     * Thay thế toàn bộ các tham chiếu `gpt-6-sol` / `gpt-5.6-sol` trong session file thành `gemini-3.8-flash`.
+     * Cắt tỉa các lượt retry 429 dở dang ở cuối tệp, đưa thread về trạng thái sạch sẽ ngay sau điểm compaction (bàn giao tóm tắt bối cảnh).
+     * Cập nhật cột `model = 'gemini-3.8-flash'` trong bảng `threads` của `~/.codex/state_5.sqlite`.
+     * Chạy `aic repair` để cân chỉnh lại biên cắt lineage (`realign_forked_lineages`) và làm sạch cache projection SQLite (`thread_history_1.sqlite`).
+  3. *Quy tắc thao tác chuẩn trong Codex CLI TUI:*
+     * Khi muốn đổi model trong phiên chat đang mở: chỉ gõ `/model` (không kèm tham số), sau đó dùng phím mũi tên `↑`/`↓` chọn model mong muốn và nhấn `Enter`.
+     * Khi muốn resume phiên chat với model mới từ terminal: sử dụng cờ chỉ định mô hình tường minh:
+       `codex resume --last -m gemini-3.8-flash`.
+

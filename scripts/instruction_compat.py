@@ -17,6 +17,10 @@ EXACT_FORBIDDEN_FINGERPRINTS: List[Tuple[str, str]] = [
     ("You are Codex, a coding agent based on GPT-5", "You are Codex, an expert coding agent"),
     ("You are Codex, an agent based on GPT-5.", "You are Codex, an expert coding agent."),
     ("You are Codex, an agent based on GPT-5", "You are Codex, an expert coding agent"),
+    ("You are Codex, a coding agent based on GPT-6.", "You are Codex, an expert coding agent."),
+    ("You are Codex, a coding agent based on GPT-6", "You are Codex, an expert coding agent"),
+    ("You are Codex, an agent based on GPT-6.", "You are Codex, an expert coding agent."),
+    ("You are Codex, an agent based on GPT-6", "You are Codex, an expert coding agent"),
 ]
 
 # Structural markers required in full Codex instruction templates
@@ -54,8 +58,9 @@ def sanitize_instruction_text(text: str) -> SanitizedText:
             result = result.replace(forbidden, replacement)
             modified = True
 
-    if "based on GPT-5" in result:
-        result = result.replace("based on GPT-5", "an expert coding agent")
+    new_result, count = re.subn(r"\bbased on GPT(?:-\d+(?:\.\d+)?)?\b", "an expert coding agent", result)
+    if count > 0:
+        result = new_result
         modified = True
 
     return SanitizedText(result, modified)
@@ -72,7 +77,14 @@ def sanitize_model_switch(text: str) -> str:
         sanitized_content, _ = sanitize_instruction_text(content)
         return f"<model_switch>{sanitized_content}</model_switch>"
 
-    return re.sub(r"<model_switch>([\s\S]*?)</model_switch>", _replace_block, text)
+    if "</model_switch>" in text:
+        return re.sub(r"<model_switch>([\s\S]*?)</model_switch>", _replace_block, text)
+    else:
+        def _replace_unclosed(m: re.Match) -> str:
+            content = m.group(1)
+            sanitized_content, _ = sanitize_instruction_text(content)
+            return f"<model_switch>{sanitized_content}"
+        return re.sub(r"<model_switch>([\s\S]*)$", _replace_unclosed, text)
 
 
 def sanitize_session_item(item: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
@@ -197,7 +209,7 @@ def has_unsanitized_fingerprint(item: Dict[str, Any]) -> bool:
         for forbidden, _ in EXACT_FORBIDDEN_FINGERPRINTS:
             if forbidden in s:
                 return True
-        return "based on GPT-5" in s
+        return bool(re.search(r"\bbased on GPT(?:-\d+(?:\.\d+)?)?\b", s))
 
     if item_type == "session_meta":
         base_inst = payload.get("base_instructions")
@@ -227,7 +239,7 @@ def has_unsanitized_fingerprint(item: Dict[str, Any]) -> bool:
     if msg is not None:
         content = msg.get("content")
         if isinstance(content, str) and "<model_switch>" in content:
-            m = re.search(r"<model_switch>([\s\S]*?)</model_switch>", content)
+            m = re.search(r"<model_switch>([\s\S]*?)(?:</model_switch>|$)", content)
             if m and _check_string(m.group(1)):
                 return True
         elif isinstance(content, list):
@@ -235,7 +247,7 @@ def has_unsanitized_fingerprint(item: Dict[str, Any]) -> bool:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     part_text = part["text"]
                     if "<model_switch>" in part_text:
-                        m = re.search(r"<model_switch>([\s\S]*?)</model_switch>", part_text)
+                        m = re.search(r"<model_switch>([\s\S]*?)(?:</model_switch>|$)", part_text)
                         if m and _check_string(m.group(1)):
                             return True
 
@@ -259,7 +271,7 @@ def verify_instruction_template(template_str: str) -> Tuple[bool, str]:
         if forbidden in template_str:
             return False, f"template contains forbidden fingerprint: '{forbidden}'"
 
-    if "based on GPT-5" in template_str:
-        return False, "template contains 'based on GPT-5'"
+    if re.search(r"\bbased on GPT(?:-\d+(?:\.\d+)?)?\b", template_str):
+        return False, "template contains 'based on GPT'"
 
     return True, "template is valid and structurally intact"

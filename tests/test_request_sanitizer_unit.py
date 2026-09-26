@@ -239,6 +239,35 @@ class TestRequestSanitizerUnit(unittest.TestCase):
             self.assertFalse(mod)
             self.assertEqual(res, invalid_payload)
 
+    def test_16_gemini_gpt6_model_switch_sanitized(self):
+        """Case 16: Gemini model with Codex v0.156.1 GPT-6 <model_switch> must be sanitized."""
+        payload = {
+            "model": "gemini-3.8-flash",
+            "stream": True,
+            "input": [
+                {
+                    "role": "developer",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "<model_switch>\n"
+                                "The user was previously using a different model. Please continue the conversation according to the following instructions:\n\n"
+                                "You are Codex, an agent based on GPT-6. You and the user share one workspace...\n"
+                                "</model_switch>"
+                            )
+                        }
+                    ]
+                },
+                {"role": "user", "content": "continue"}
+            ]
+        }
+        sanitized, modified = sanitize_request_payload(payload)
+        self.assertTrue(modified)
+        part_text = sanitized["input"][0]["content"][0]["text"]
+        self.assertNotIn("based on GPT-6", part_text)
+        self.assertIn("an expert coding agent", part_text)
+
 
 def test_request_sanitizer_unit():
     """Runner function for integration into run_tests.py."""

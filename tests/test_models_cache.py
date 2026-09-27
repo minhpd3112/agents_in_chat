@@ -26,7 +26,8 @@ def test_models_cache():
         return False, f"TTL not locked to 2099! Current: {data.get('fetched_at')}"
     
     models = {m.get('slug'): m for m in data.get('models', [])}
-    for slug in ['gemini-3.8-flash', 'claude-sonnet-4.6-thinking', 'gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'muse-spark-1.3']:
+    sol_slug = 'gpt-6-sol' if 'gpt-6-sol' in models else 'gpt-5.6-sol'
+    for slug in ['gemini-3.8-flash', 'claude-sonnet-4.6-thinking', 'gpt-5.6-luna', 'gpt-5.6-terra', sol_slug, 'muse-spark-1.3']:
         if slug not in models:
             return False, f"Missing model: {slug}"
         m = models[slug]

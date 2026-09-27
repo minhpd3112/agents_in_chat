@@ -11,7 +11,7 @@ max-retry-interval: 1
 
 routing:
   strategy: "round-robin"
-  session-affinity: false
+  session-affinity: true
 
 remote-management:
   disable-auto-update-panel: true

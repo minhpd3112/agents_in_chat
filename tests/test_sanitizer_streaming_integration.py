@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import List, Optional
+from unittest import mock
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR / "scripts"))
@@ -420,6 +421,110 @@ class TestSanitizerStreamingIntegration(unittest.TestCase):
         finally:
             orphan_sanitizer.shutdown()
             orphan_sanitizer.server_close()
+
+    def test_12_compaction_keeps_sol_without_selected_antigravity_model(self):
+        payload = {
+            "model": "gpt-6-sol",
+            "client_metadata": {"request_kind": "compaction"},
+            "input": [{"role": "user", "content": "CONTEXT CHECKPOINT COMPACTION"}],
+        }
+        raw_body = json.dumps(payload, indent=2).encode("utf-8")
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+
+        for configured_model in ("gpt-6-sol", None):
+            with self.subTest(configured_model=configured_model):
+                with mock.patch("request_sanitizer.get_configured_codex_model", return_value=configured_model):
+                    req = urllib.request.Request(url, data=raw_body, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        self.assertEqual(resp.status, 200)
+                        resp.read()
+                self.assertEqual(self.backend_server.last_received_body, raw_body)
+                self.assertEqual(self.backend_server.last_received_json["model"], "gpt-6-sol")
+
+    def test_13_compaction_uses_selected_gemini_or_claude_for_handoff(self):
+        payload = {
+            "model": "gpt-6-sol",
+            "stream": True,
+            "input": [
+                {"role": "developer", "content": "<model_switch>You are Codex, an agent based on GPT-6.</model_switch>"},
+                {"role": "user", "content": "CONTEXT CHECKPOINT COMPACTION"},
+            ],
+        }
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        raw_body = json.dumps(payload).encode("utf-8")
+
+        for target_model in ("gemini-3.8-flash", "claude-sonnet-4.6-thinking"):
+            with self.subTest(target_model=target_model):
+                with mock.patch("request_sanitizer.get_configured_codex_model", return_value=target_model):
+                    req = urllib.request.Request(
+                        url,
+                        data=raw_body,
+                        headers={
+                            "Content-Type": "application/json",
+                            "X-Codex-Turn-Metadata": '{"request_kind":"compaction"}',
+                        },
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        self.assertEqual(resp.status, 200)
+                        self.assertIn(b"response.completed", resp.read())
+
+                forwarded = self.backend_server.last_received_json
+                self.assertEqual(forwarded["model"], target_model)
+                self.assertNotIn("based on GPT-6", forwarded["input"][0]["content"])
+
+    def test_14_compaction_does_not_reroute_unknown_provider(self):
+        payload = {
+            "model": "muse-spark-1.3",
+            "client_metadata": {"request_kind": "compaction"},
+            "input": [{"role": "user", "content": "CONTEXT CHECKPOINT COMPACTION"}],
+        }
+        raw_body = json.dumps(payload, indent=2).encode("utf-8")
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+
+        with mock.patch("request_sanitizer.get_configured_codex_model", return_value="gemini-3.8-flash"):
+            req = urllib.request.Request(url, data=raw_body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                resp.read()
+
+        self.assertEqual(self.backend_server.last_received_body, raw_body)
+
+    def test_15_regular_turn_quoting_compaction_prompt_keeps_sol(self):
+        payload = {
+            "model": "gpt-6-sol",
+            "client_metadata": {"request_kind": "turn"},
+            "input": [{"role": "user", "content": "Explain CONTEXT CHECKPOINT COMPACTION"}],
+        }
+        raw_body = json.dumps(payload, indent=2).encode("utf-8")
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+
+        with mock.patch("request_sanitizer.get_configured_codex_model", return_value="gemini-3.8-flash"):
+            req = urllib.request.Request(url, data=raw_body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+                resp.read()
+
+        self.assertEqual(self.backend_server.last_received_body, raw_body)
+
+    def test_16_compaction_on_selected_antigravity_model_keeps_that_model(self):
+        url = f"http://127.0.0.1:{self.sanitizer_port}/v1/responses"
+        for active_model in ("gemini-3.8-flash", "claude-sonnet-4.6-thinking"):
+            with self.subTest(active_model=active_model):
+                payload = {
+                    "model": active_model,
+                    "client_metadata": {"request_kind": "compaction"},
+                    "input": [{"role": "user", "content": "Summarize the current context"}],
+                }
+                with mock.patch("request_sanitizer.get_configured_codex_model", return_value=active_model):
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        self.assertEqual(resp.status, 200)
+                        resp.read()
+                self.assertEqual(self.backend_server.last_received_json["model"], active_model)
 
 
 def test_sanitizer_streaming_integration():

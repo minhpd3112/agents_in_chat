@@ -312,6 +312,23 @@ class TestRequestSanitizerUnit(unittest.TestCase):
         self.assertFalse(is_compaction_request({}, None))
         self.assertFalse(is_compaction_request({}, "invalid"))
 
+    def test_21_explicit_turn_metadata_overrides_quoted_compaction_prompt(self):
+        payload = {
+            "model": "gpt-6-sol",
+            "client_metadata": {"request_kind": "turn"},
+            "input": [{"role": "user", "content": "Please explain CONTEXT CHECKPOINT COMPACTION"}],
+        }
+        self.assertFalse(is_compaction_request({}, payload))
+        self.assertFalse(is_compaction_request(
+            {"X-Codex-Turn-Metadata": '{"request_kind": "turn"}'},
+            payload,
+        ))
+
+    def test_22_structured_compaction_metadata_accepts_json_whitespace(self):
+        payload = {"model": "gpt-6-sol", "input": []}
+        headers = {"X-Codex-Turn-Metadata": '{"request_kind": "compaction", "session_id": "abc"}'}
+        self.assertTrue(is_compaction_request(headers, payload))
+
 
 def test_request_sanitizer_unit():
     """Runner function for integration into run_tests.py."""

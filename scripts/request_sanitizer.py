@@ -62,6 +62,17 @@ ANTIGRAVITY_ALLOWLIST: Set[str] = {
     "claude-3-7-sonnet",
 }
 
+# Compaction handoff is only needed when Codex keeps one of these OpenAI
+# models after the user has selected an Antigravity model. Keep unknown models
+# on their original route instead of treating every non-Antigravity model as OpenAI.
+OPENAI_COMPACTION_MODELS: Set[str] = {
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-5.6-sol",  # Legacy Sol session identifier
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+}
+
 # Backward compatibility alias
 ANTIGRAVITY_KNOWN_MODELS = ANTIGRAVITY_ALLOWLIST
 
@@ -91,6 +102,13 @@ def is_antigravity_model(model_name: Optional[str]) -> bool:
     return model_name.strip().lower() in ANTIGRAVITY_ALLOWLIST
 
 
+def is_openai_compaction_model(model_name: Optional[str]) -> bool:
+    """Recognize OpenAI models whose old thread context may require a handoff."""
+    if not model_name or not isinstance(model_name, str):
+        return False
+    return model_name.strip().lower() in OPENAI_COMPACTION_MODELS
+
+
 def get_configured_codex_model() -> Optional[str]:
     """Read the currently configured model from ~/.codex/config.toml."""
     codex_dir = os.environ.get("AIC_CODEX_DIR") or os.environ.get("CODEX_DIR") or os.environ.get("CODEX_HOME")
@@ -116,25 +134,37 @@ def is_compaction_request(headers: Any, payload: Dict[str, Any]) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    # 1. Header checks
+    def request_kind(value: Any) -> Optional[str]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(value, dict):
+            kind = value.get("request_kind")
+            return kind if isinstance(kind, str) else None
+        return None
+
+    # An explicit request kind takes precedence over text in the conversation.
     turn_meta = ""
     if hasattr(headers, "get"):
         turn_meta = headers.get("X-Codex-Turn-Metadata") or headers.get("x-codex-turn-metadata") or ""
-    if '"request_kind":"compaction"' in turn_meta:
-        return True
+    header_kind = request_kind(turn_meta)
+    if header_kind is not None:
+        return header_kind == "compaction"
 
-    # 2. Payload metadata checks
     client_meta = payload.get("client_metadata")
     if isinstance(client_meta, dict):
-        if client_meta.get("request_kind") == "compaction":
-            return True
-        if "compaction" in client_meta:
-            return True
-        turn_meta_str = client_meta.get("x-codex-turn-metadata")
-        if isinstance(turn_meta_str, str) and '"request_kind":"compaction"' in turn_meta_str:
-            return True
+        client_kind = request_kind(client_meta)
+        if client_kind is not None:
+            return client_kind == "compaction"
+        if isinstance(client_meta.get("compaction"), bool):
+            return client_meta["compaction"]
+        nested_kind = request_kind(client_meta.get("x-codex-turn-metadata"))
+        if nested_kind is not None:
+            return nested_kind == "compaction"
 
-    # 3. Prompt content check (signature of Codex compaction turn)
+    # Fallback for Codex versions without structured compaction metadata.
     inputs = payload.get("input")
     if isinstance(inputs, list):
         for item in inputs:
@@ -305,24 +335,19 @@ class SanitizerProxyHandler(http.server.BaseHTTPRequestHandler):
                 self._send_error_response(400, "JSON payload root must be an object")
                 return
 
-            # Compaction Fallback: When switching models in an ongoing session, Codex CLI
-            # sends a context compaction request using the thread's previous model (e.g. gpt-6-sol).
-            # If that model is not an Antigravity model and is cooling down (429 limit hit),
-            # rewrite the compaction model to the active model from config.toml (or gemini-3.8-flash)
-            # so the handoff summary succeeds immediately without blocking the user turn.
+            # Codex may retain the thread's old OpenAI model for a compaction
+            # request after the user switches to Gemini or Claude. Use the
+            # selected Antigravity model for that handoff. With no such target,
+            # preserve the requested model instead of guessing a fallback.
             is_compact = is_compaction_request(self.headers, payload)
             rewrote_compaction = False
             if is_compact:
                 req_model = payload.get("model")
-                if not is_antigravity_model(req_model):
+                if is_openai_compaction_model(req_model):
                     target_model = get_configured_codex_model()
                     if target_model and is_antigravity_model(target_model):
-                        info(f"Compaction model rewrite: '{req_model}' -> '{target_model}' (bypassing dead OpenAI model)")
+                        info(f"Compaction handoff: '{req_model}' -> '{target_model}'")
                         payload["model"] = target_model
-                        rewrote_compaction = True
-                    elif not target_model or not is_antigravity_model(target_model):
-                        info(f"Compaction model rewrite: '{req_model}' -> 'gemini-3.8-flash' (fallback default)")
-                        payload["model"] = "gemini-3.8-flash"
                         rewrote_compaction = True
 
             # Strict Model Matching: Only sanitize if model is in ANTIGRAVITY_ALLOWLIST
